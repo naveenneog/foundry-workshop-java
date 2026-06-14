@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.microsoft.foundry</groupId>
+    <artifactId>foundry-workshop-java</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+
+    <name>Microsoft Foundry: End-to-End Workshop (Java)</name>
+    <description>
+        A hands-on, end-to-end coding workshop for building enterprise AI agents and apps
+        on Microsoft Foundry (Azure AI Foundry) — Azure's unified PaaS for models,
+        agents, knowledge, evaluation, and observability. All lab code is in Java.
+    </description>
+    <url>https://monuminu.github.io/foundry-workshop/</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+        </license>
+    </licenses>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <!-- Azure SDK BOM aligns all com.azure artifact versions -->
+        <azure.sdk.bom.version>1.2.32</azure.sdk.bom.version>
+
+        <!-- Versions not covered by the BOM -->
+        <azure.ai.agents.version>1.0.0-beta.2</azure.ai.agents.version>
+        <azure.ai.openai.version>1.0.0-beta.16</azure.ai.openai.version>
+        <azure.monitor.exporter.version>1.0.0-beta.28</azure.monitor.exporter.version>
+        <dotenv.java.version>3.2.0</dotenv.java.version>
+        <jackson.version>2.18.4</jackson.version>
+        <opentelemetry.version>1.48.0</opentelemetry.version>
+
+        <!-- Test -->
+        <junit.version>5.12.2</junit.version>
+        <mockito.version>5.17.0</mockito.version>
+        <assertj.version>3.27.3</assertj.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Azure SDK BOM — pins all com.azure:* versions consistently -->
+            <dependency>
+                <groupId>com.azure</groupId>
+                <artifactId>azure-sdk-bom</artifactId>
+                <version>${azure.sdk.bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+
+        <!-- ── Core Azure AI Foundry ─────────────────────────────────────── -->
+
+        <!-- Azure AI Agents Persistent — agent creation, threads, runs, messages -->
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-ai-agents-persistent</artifactId>
+            <version>${azure.ai.agents.version}</version>
+        </dependency>
+
+        <!-- Azure Identity — DefaultAzureCredential, keyless auth -->
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-identity</artifactId>
+        </dependency>
+
+        <!-- Azure OpenAI — chat, embeddings, streaming, Responses API -->
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-ai-openai</artifactId>
+            <version>${azure.ai.openai.version}</version>
+        </dependency>
+
+        <!-- ── Grounding / Search (M4, M7) ───────────────────────────────── -->
+
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-search-documents</artifactId>
+        </dependency>
+
+        <!-- ── Observability / Tracing (M10) ─────────────────────────────── -->
+
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-monitor-opentelemetry-exporter</artifactId>
+            <version>${azure.monitor.exporter.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk</artifactId>
+            <version>${opentelemetry.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-api</artifactId>
+            <version>${opentelemetry.version}</version>
+        </dependency>
+
+        <!-- Azure Monitor Query — query logs from Application Insights (M10) -->
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-monitor-query</artifactId>
+        </dependency>
+
+        <!-- ── Utilities ─────────────────────────────────────────────────── -->
+
+        <!-- Load .env files (equivalent to python-dotenv) -->
+        <dependency>
+            <groupId>io.github.cdimascio</groupId>
+            <artifactId>dotenv-java</artifactId>
+            <version>${dotenv.java.version}</version>
+        </dependency>
+
+        <!-- JSON serialization — tool arguments, REST payloads -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+
+        <!-- HTTP client for direct REST calls (M13 REST lab, red teaming) -->
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-core-http-netty</artifactId>
+        </dependency>
+
+        <!-- SLF4J logging facade + Simple backend -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.17</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>2.0.17</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- ── Test ──────────────────────────────────────────────────────── -->
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>${assertj.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <build>
+        <plugins>
+
+            <!-- Enforce Java 17 source/target -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.14.0</version>
+                <configuration>
+                    <release>17</release>
+                </configuration>
+            </plugin>
+
+            <!-- Use JUnit Platform for test execution -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.3</version>
+                <configuration>
+                    <includes>
+                        <include>**/*Test.java</include>
+                        <include>**/*Tests.java</include>
+                    </includes>
+                </configuration>
+            </plugin>
+
+            <!-- Package a fat/uber JAR so labs can be run with java -jar -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+        </plugins>
+    </build>
+
+</project>

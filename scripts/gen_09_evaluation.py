@@ -20,9 +20,6 @@ the reference (azure-ai-evaluation 1.16.x).
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M9 · Evaluation
@@ -61,22 +58,10 @@ Same `.env` as every lab. Evaluators that act as LLM-judges need the **OpenAI-st
 account endpoint** (not the `/api/projects/...` path), so we derive it from
 `PROJECT_ENDPOINT` — no extra variable to set."""),
     code("""\
-import os, json
-from pathlib import Path
-from dotenv import load_dotenv
-
-load_dotenv()  # reads .env from the repo root
-
-PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-CHAT_MODEL       = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-
-# The judge model lives on the account; the AOAI endpoint is the account root,
-# i.e. PROJECT_ENDPOINT with the "/api/projects/<project>" suffix removed.
-AOAI_ENDPOINT = PROJECT_ENDPOINT.split("/api/projects/")[0] + "/"
-
-print("Project :", PROJECT_ENDPOINT)
-print("AOAI    :", AOAI_ENDPOINT)
-print("Judge   :", CHAT_MODEL)"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module09Evaluation
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module09Evaluation.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -95,18 +80,20 @@ deployment, plus a `DefaultAzureCredential` for keyless Entra auth. The credenti
 passed to each evaluator (not baked into the config) — this also sidesteps a known
 Python 3.13 validation quirk in the 1.16.x SDK."""),
     code("""\
-from azure.identity import DefaultAzureCredential
-from azure.ai.evaluation import AzureOpenAIModelConfiguration
-
-credential = DefaultAzureCredential()
-
-model_config = AzureOpenAIModelConfiguration(
-    azure_endpoint=AOAI_ENDPOINT,
-    azure_deployment=CHAT_MODEL,
-)
-
-print("credential   : ready")
-print("model_config : ready ->", CHAT_MODEL)"""),
+import com.azure.ai.openai.OpenAIClient;
+import com.azure.ai.openai.OpenAIClientBuilder;
+import com.azure.ai.openai.models.ChatCompletions;
+import com.azure.ai.openai.models.ChatCompletionsOptions;
+import com.azure.ai.openai.models.ChatRequestSystemMessage;
+import com.azure.ai.openai.models.ChatRequestUserMessage;
+import com.azure.core.credential.TokenCredential;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -128,46 +115,9 @@ captures these from a live agent thread; we hand-write four rows so the lab is
 self-contained — and we make **row 3 deliberately wrong** so the scores have something
 to catch."""),
     code("""\
-records = [
-    {"query": "What does DefaultAzureCredential do in a Foundry app?",
-     "context": "DefaultAzureCredential tries credential sources in order (environment, "
-                "managed identity, az login) and uses the first that works — no secrets in code.",
-     "response": "It authenticates by trying several sources in sequence — environment "
-                 "variables, managed identity, then your az login session — and uses the first "
-                 "that succeeds, so you never hard-code secrets.",
-     "ground_truth": "Authenticates via a chain of sources (env, managed identity, az login); "
-                     "requires no secrets in code."},
-
-    {"query": "How does agent versioning work in Foundry?",
-     "context": "An agent is stored under a stable name. create_version stores a new version "
-                "whenever the definition changes; callers reference the name.",
-     "response": "Each agent has a stable name, and create_version stores a new numbered version "
-                 "whenever the definition changes. Callers reference the agent by name, so they "
-                 "keep working as you publish new versions.",
-     "ground_truth": "Agents are stored by name; create_version makes a new version on each "
-                     "change; callers reference by name."},
-
-    {"query": "What embedding size does text-embedding-3-large return?",
-     "context": "text-embedding-3-large returns 3072-dimensional vectors.",
-     "response": "The text-embedding-3-large model returns 1536-dimensional vectors by default.",
-     "ground_truth": "text-embedding-3-large returns 3072-dimensional vectors."},
-
-    {"query": "What is the Responses API used for?",
-     "context": "The Responses API is the modern stateful surface that powers agents and tools; "
-                "a minimal call takes a model and an input and returns output_text.",
-     "response": "It's Foundry's modern, stateful interface that powers agents and tools. A "
-                 "minimal call passes a model and an input, and the reply is in output_text.",
-     "ground_truth": "Modern stateful API that powers agents and tools; minimal call takes "
-                     "model + input, returns output_text."},
-]
-
-DATA_PATH = Path("eval_test_data.jsonl")
-with DATA_PATH.open("w", encoding="utf-8") as fh:
-    for r in records:
-        fh.write(json.dumps(r) + "\\n")
-
-print(f"Wrote {len(records)} rows -> {DATA_PATH}")
-print("Row 3 is intentionally wrong (1536 vs 3072) — watch groundedness flag it.")"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -187,23 +137,21 @@ pass/fail against a threshold). We spot-check three on single rows:
 - **Groundedness** — is it supported by the `context`? *(needs `query`, `response`, `context`)*
 - **Coherence** — is it logically structured? *(needs `query`, `response`)*"""),
     code("""\
-from azure.ai.evaluation import (
-    RelevanceEvaluator, GroundednessEvaluator, CoherenceEvaluator,
-)
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-relevance_eval    = RelevanceEvaluator(model_config=model_config, credential=credential)
-groundedness_eval = GroundednessEvaluator(model_config=model_config, credential=credential)
-coherence_eval    = CoherenceEvaluator(model_config=model_config, credential=credential)
+System.out.println("Project : " + config.projectEndpoint);
+System.out.println("Judge   : " + config.chatModel);
+System.out.println();
 
-good = records[0]   # solid answer
-bad  = records[2]   # the deliberately-wrong embedding row
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
+OpenAIClient judgeClient = new OpenAIClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();
 
-print("GOOD row")
-print("  relevance    :", relevance_eval(query=good["query"], response=good["response"]))
-print("  groundedness :", groundedness_eval(query=good["query"], response=good["response"], context=good["context"]))
-
-print("\\nBAD row (wrong dimension)")
-print("  groundedness :", groundedness_eval(query=bad["query"], response=bad["response"], context=bad["context"]))"""),
+LlmJudge judge = new LlmJudge(judgeClient, config.chatModel);
+KeyTermCoverageEvaluator ktEval = new KeyTermCoverageEvaluator();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -231,31 +179,18 @@ understand intent and call the right tools? These also use the judge model:
 We feed a captured turn directly. (For *live* agent threads, the SDK ships
 `AIAgentConverter` to turn `thread_id`/`run_id` into this shape — see the note.)"""),
     code("""\
-from azure.ai.evaluation import (
-    IntentResolutionEvaluator, TaskAdherenceEvaluator, ToolCallAccuracyEvaluator,
-)
+// ── Spot-check individual rows ────────────────────────────────────────
+System.out.println("=== Spot checks ===");
+EvalRecord good = TEST_DATA.get(0);
+EvalRecord bad  = TEST_DATA.get(2);
 
-intent_eval    = IntentResolutionEvaluator(model_config=model_config, credential=credential)
-adherence_eval = TaskAdherenceEvaluator(model_config=model_config, credential=credential)
-toolcall_eval  = ToolCallAccuracyEvaluator(model_config=model_config, credential=credential)
+System.out.println("GOOD row");
+System.out.println("  relevance    : " + judge.relevance(good.query(), good.response()));
+System.out.println("  groundedness : " + judge.groundedness(good.query(), good.response(), good.context()));
 
-# A captured agent turn: user query, the tool the agent chose, and its final answer.
-query    = "How many dimensions does text-embedding-3-large output?"
-response = "It returns 3072-dimensional vectors. [kb:embeddings]"
-
-tool_calls = [{
-    "type": "tool_call", "tool_call_id": "call_1", "name": "kb_search",
-    "arguments": {"query": "text-embedding-3-large dimensions"},
-}]
-tool_definitions = [{
-    "name": "kb_search", "description": "Search the knowledge base for a query.",
-    "parameters": {"type": "object",
-                   "properties": {"query": {"type": "string"}}, "required": ["query"]},
-}]
-
-print("intent resolution :", intent_eval(query=query, response=response))
-print("task adherence    :", adherence_eval(query=query, response=response))
-print("tool-call accuracy:", toolcall_eval(query=query, tool_calls=tool_calls, tool_definitions=tool_definitions))"""),
+System.out.println("BAD row (wrong dimension)");
+System.out.println("  groundedness : " + judge.groundedness(bad.query(), bad.response(), bad.context()));
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -277,26 +212,29 @@ Built-ins won't cover every rule your domain cares about. A **custom evaluator**
 **callable returning a score dict** — no LLM required. Here we enforce a contract: the
 answer must *cover the key terms* from its `ground_truth`. Simple, deterministic, cheap."""),
     code("""\
-class KeyTermCoverageEvaluator:
-    \"\"\"Score = fraction of ground_truth key terms that appear in the response.\"\"\"
+// ── Batch evaluation ──────────────────────────────────────────────────
+System.out.println("=== Batch evaluation ===");
+double totalRelevance = 0, totalGroundedness = 0, totalCoherence = 0;
+double totalCoverage = 0;
+int n = TEST_DATA.size();
 
-    def __init__(self, min_len=4, threshold=0.5):
-        self.min_len = min_len          # ignore short/stop-ish words
-        self.threshold = threshold      # pass if coverage >= this
+for (EvalRecord record : TEST_DATA) {
+    double relevance    = judge.relevance(record.query(), record.response());
+    double groundedness = judge.groundedness(record.query(), record.response(), record.context());
+    double coherence    = judge.coherence(record.query(), record.response());
+    Map<String, Object> kt = ktEval.evaluate(record.response(), record.groundTruth());
 
-    def __call__(self, *, response: str, ground_truth: str, **kwargs) -> dict:
-        terms = {w.lower().strip(".,;:()") for w in ground_truth.split() if len(w) >= self.min_len}
-        hay   = response.lower()
-        hits  = {t for t in terms if t in hay}
-        coverage = round(len(hits) / len(terms), 2) if terms else 0.0
-        return {
-            "key_term_coverage": coverage,
-            "key_term_pass": coverage >= self.threshold,
-        }
+    totalRelevance    += relevance;
+    totalGroundedness += groundedness;
+    totalCoherence    += coherence;
+    totalCoverage     += (Double) kt.get("key_term_coverage");
+}
 
-cov = KeyTermCoverageEvaluator()
-print("good row:", cov(response=records[0]["response"], ground_truth=records[0]["ground_truth"]))
-print("bad  row:", cov(response=records[2]["response"], ground_truth=records[2]["ground_truth"]))"""),
+System.out.println("Aggregate metrics:");
+System.out.printf("  %-32s %.2f%n", "relevance",        totalRelevance    / n);
+System.out.printf("  %-32s %.2f%n", "groundedness",     totalGroundedness / n);
+System.out.printf("  %-32s %.2f%n", "coherence",        totalCoherence    / n);
+System.out.printf("  %-32s %.2f%n", "key_term_coverage",totalCoverage     / n);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -314,34 +252,7 @@ Spot-checks are for debugging; **`evaluate()`** is the real run. It applies all 
 across every row of the `.jsonl`, aggregates **metrics**, and — when you pass
 `azure_ai_project` — uploads the run to the **Foundry portal** and returns a `studio_url`.
 `column_mapping` tells each evaluator which dataset columns to read."""),
-    code("""\
-from azure.ai.evaluation import evaluate
-
-results = evaluate(
-    data=str(DATA_PATH),
-    evaluators={
-        "relevance":     relevance_eval,
-        "groundedness":  groundedness_eval,
-        "coherence":     coherence_eval,
-        "key_term":      KeyTermCoverageEvaluator(),
-    },
-    evaluator_config={
-        "relevance":    {"column_mapping": {"query": "${data.query}", "response": "${data.response}"}},
-        "groundedness": {"column_mapping": {"query": "${data.query}", "response": "${data.response}",
-                                            "context": "${data.context}"}},
-        "coherence":    {"column_mapping": {"query": "${data.query}", "response": "${data.response}"}},
-        "key_term":     {"column_mapping": {"response": "${data.response}",
-                                            "ground_truth": "${data.ground_truth}"}},
-    },
-    azure_ai_project=PROJECT_ENDPOINT,   # uploads the run + returns a studio_url
-    output_path="eval_results.jsonl",
-)
-
-print("Aggregate metrics:")
-for k, v in results.get("metrics", {}).items():
-    print(f"  {k:<32} {v}")
-
-print("\\nPortal:", results.get("studio_url", "(no studio_url — check azure_ai_project)"))"""),
+,
     md("""\
 !!! note "Expected output"
     ```
@@ -387,6 +298,4 @@ traffic** with tracing and continuous evaluation.
 write_notebook(
     "docs/modules/09-evaluation.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )

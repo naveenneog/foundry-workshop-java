@@ -26,9 +26,6 @@ Real shapes taken verbatim from the reference:
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M14 · Fine-Tuning & Distillation
@@ -76,22 +73,10 @@ Same `.env` as every lab. The **teacher** is this project's `CHAT_MODEL`; the
 models matter here — their licences permit training derivative models on their
 outputs."""),
     code("""\
-import os, json
-from pathlib import Path
-from dotenv import load_dotenv
-
-load_dotenv()  # reads .env from the repo root
-
-PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-TEACHER_MODEL    = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-STUDENT_MODEL    = os.environ.get("STUDENT_MODEL", "microsoft/Phi-4-mini-instruct")
-
-DATA_DIR  = Path("finetune_data"); DATA_DIR.mkdir(exist_ok=True)
-TRAIN_FILE = DATA_DIR / "train.jsonl"
-
-print("Teacher :", TEACHER_MODEL, "(labels the data)")
-print("Student :", STUDENT_MODEL, "(gets fine-tuned)")
-print("Train   :", TRAIN_FILE)"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module14FineTuningDistillation
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module14FineTuningDistillation.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -111,24 +96,16 @@ Ours: read an ISS daily status report and classify its severity
 builder** encodes the rubric — the teacher uses it to label data, and the student
 learns to reproduce its output format exactly."""),
     code("""\
-def create_classification_prompt(report_text: str) -> dict:
-    \"\"\"System rubric + user report -> the messages the teacher (and student) see.\"\"\"
-    system = (
-        "You are an expert ISS Flight Controller. Classify the daily station status "
-        "report into exactly one severity level.\\n\\n"
-        "SEVERITY (highest to lowest):\\n"
-        "1. CRITICAL  - immediate threat to crew safety or vehicle integrity.\\n"
-        "2. WARNING   - loss of a critical system function or redundancy.\\n"
-        "3. CAUTION   - degraded component performance or localized failure.\\n"
-        "4. ADVISORY  - minor off-nominal condition, no impact.\\n"
-        "5. NOMINAL   - normal operations.\\n\\n"
-        "Respond in the format:\\nSEVERITY: <level>\\nREASON: <one sentence>"
-    )
-    return {"system": system, "user": f"Classify this report:\\n\\n{report_text}"}
-
-example = create_classification_prompt("Coolant loop B pump showing degraded flow; crew swapped to backup. No crew impact.")
-print(example["system"][:120], "...")
-print("\\nUSER:", example["user"][:90], "...")"""),
+import com.azure.ai.openai.OpenAIClient;
+import com.azure.ai.openai.OpenAIClientBuilder;
+import com.azure.ai.openai.models.ChatCompletions;
+import com.azure.ai.openai.models.ChatCompletionsOptions;
+import com.azure.ai.openai.models.ChatRequestMessage;
+import com.azure.ai.openai.models.ChatRequestSystemMessage;
+import com.azure.ai.openai.models.ChatRequestUserMessage;
+import com.azure.core.credential.TokenCredential;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import java.util.List;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -149,44 +126,9 @@ passes**: first *write* a realistic report (high temperature, for variety), then
 user, assistant}` triple it produces is one training example — synthetic data,
 labelled by the strong model, in the exact format the student must learn."""),
     code("""\
-openai_client = None  # set in a real run: AIProjectClient(...).get_openai_client()
-
-def make_training_example(scenario: str) -> dict:
-    \"\"\"Teacher writes a report for `scenario`, then labels it -> one training row.\"\"\"
-    # Pass 1 — generate a synthetic report (creative).
-    report = openai_client.chat.completions.create(
-        model=TEACHER_MODEL, temperature=0.8, max_tokens=400,
-        messages=[{"role": "system", "content": "Write a realistic 1-paragraph ISS daily status report."},
-                  {"role": "user",   "content": f"Scenario: {scenario}"}],
-    ).choices[0].message.content
-
-    # Pass 2 — teacher classifies its own report (deterministic).
-    p = create_classification_prompt(report)
-    label = openai_client.chat.completions.create(
-        model=TEACHER_MODEL, temperature=0.1, max_tokens=120,
-        messages=[{"role": "system", "content": p["system"]},
-                  {"role": "user",   "content": p["user"]}],
-    ).choices[0].message.content
-
-    return {"system": p["system"], "user": p["user"], "assistant": label}
-
-SCENARIOS = ["routine maintenance day", "ammonia coolant leak detected",
-             "thruster misfire during reboost", "science payload software crash"]
-
-# In a real run, loop make_training_example over hundreds of scenarios. Here we
-# write a couple of hand-labelled rows so the file format is concrete.
-demo_rows = [
-    {**create_classification_prompt("Nominal ops; all systems green; routine filter swap completed."),
-     "assistant": "SEVERITY: NOMINAL\\nREASON: Routine maintenance with all systems nominal."},
-    {**create_classification_prompt("External ammonia coolant leak on loop A; isolated; redundancy lost."),
-     "assistant": "SEVERITY: WARNING\\nREASON: Loss of cooling redundancy from an external coolant leak."},
-]
-with TRAIN_FILE.open("w") as fh:
-    for row in demo_rows:
-        fh.write(json.dumps(row) + "\\n")
-
-print(f"Wrote {len(demo_rows)} example rows -> {TRAIN_FILE}")
-print("Real distillation: loop make_training_example over 500+ scenarios.")"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -205,26 +147,18 @@ You don't retrain all of Phi-4-mini — that's billions of weights. **LoRA**
 adapter matrices on a few attention/MLP projections. **Olive** drives it from one
 CLI call. `--target_modules` names the projections LoRA adapts."""),
     code("""\
-# ── GPU REQUIRED — illustrative; run where an A100/CUDA GPU is available. ──────
-# Needs the `finetune` extra: pip install -e ".[finetune]"
-olive_command = [
-    "olive", "finetune",
-    "--method", "lora",
-    "--model_name_or_path", STUDENT_MODEL,
-    "--trust_remote_code",
-    "--data_name", "json",
-    "--data_files", str(TRAIN_FILE),
-    "--text_template", "{system}\\n{user}\\n{assistant}",
-    "--target_modules", "qkv_proj,o_proj,gate_up_proj,down_proj",
-    "--max_steps", "100",
-    "--output_path", "finetune_data/adapter",
-]
-print("Fine-tune command (run on a GPU host):\\n")
-print("  " + " ".join(olive_command))
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-# On a GPU box you'd execute it:
-# import subprocess; subprocess.run(olive_command, check=True)
-print("\\n(Not executed here — see the GPU warning at the top.)")"""),
+System.out.println("Project       : " + config.projectEndpoint);
+System.out.println("Teacher model : " + config.chatModel);
+System.out.println();
+
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
+OpenAIClient client = new OpenAIClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -255,27 +189,31 @@ compare accuracy: the **teacher** (ceiling), the **base** student (before
 fine-tuning), and the **fine-tuned** student. The win condition is the fine-tuned
 student beating its base self."""),
     code("""\
-# Accuracies from an evaluation run (see the reference's ACA eval job). Plug your
-# own numbers in here after fine-tuning.
-results = {
-    "gpt-4.1-mini (teacher)":   0.80,
-    "Phi-4-mini (base)":        0.457,
-    "Phi-4-mini (fine-tuned)":  0.514,
+// ── 1. Generate teacher completions (distillation data) ───────────────
+System.out.println("=== Step 1: Generate teacher completions ===");
+StringBuilder jsonl = new StringBuilder();
+
+for (String prompt : TRAINING_PROMPTS) {
+    String teacherAnswer = chat(client, config.chatModel, prompt);
+    System.out.println("Q: " + prompt);
+    System.out.println("A: " + teacherAnswer.substring(0, Math.min(100, teacherAnswer.length())) + "...");
+    System.out.println();
+
+    // Format as JSONL training record (OpenAI fine-tuning format)
+    String record = String.format(
+        "{\"messages\": [{\"role\": \"system\", \"content\": \"You are a concise Azure AI Foundry expert.\"}, " +
+        "{\"role\": \"user\", \"content\": %s}, " +
+        "{\"role\": \"assistant\", \"content\": %s}]}",
+        escapeJson(prompt), escapeJson(teacherAnswer)
+    );
+    jsonl.append(record).append("\n");
 }
 
-print(f"{'model':<28}{'accuracy':>9}")
-print("-" * 37)
-for name, acc in results.items():
-    bar = "█" * round(acc * 20)
-    print(f"{name:<28}{acc:>8.1%}  {bar}")
-
-gain = results["Phi-4-mini (fine-tuned)"] - results["Phi-4-mini (base)"]
-print(f"\\nFine-tuning gain: {gain:+.1%}  (base {results['Phi-4-mini (base)']:.1%} "
-      f"-> {results['Phi-4-mini (fine-tuned)']:.1%})")
-
-# With matplotlib (in the finetune extra) you'd draw the bar chart:
-# import matplotlib.pyplot as plt
-# plt.bar(results.keys(), results.values()); plt.ylabel("accuracy"); plt.show()"""),
+System.out.println("Training JSONL preview (first record):");
+System.out.println(jsonl.toString().lines().findFirst().orElse(""));
+System.out.println();
+System.out.println("Total training records: " + TRAINING_PROMPTS.size());
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -300,27 +238,25 @@ model, apply the **LoRA adapter** with `PeftModel.from_pretrained`, and classify
 report on your laptop's CPU/GPU — no API call. The adapter is what shipped; the
 base weights are public."""),
     code("""\
-# ── Needs the `finetune` extra (torch + transformers + peft). Runs on CPU/MPS/CUDA. ──
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
+// ── 2. Fine-tuning job (pattern — not executed to avoid costs) ─────────
+System.out.println("=== Step 2: Fine-tuning job (pattern) ===");
+System.out.println(\"\"\"
+    Fine-tuning pattern (not executed — uncomment to run):
 
-ADAPTER_PATH = "finetune_data/adapter"
-device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+    // 1. Upload training file
+    // POST https://<account>.openai.azure.com/openai/files
+    //   body: multipart/form-data with training.jsonl, purpose=fine-tune
 
-tokenizer  = AutoTokenizer.from_pretrained(STUDENT_MODEL, trust_remote_code=True)
-base_model = AutoModelForCausalLM.from_pretrained(STUDENT_MODEL, trust_remote_code=True).to(device)
-ft_model   = PeftModel.from_pretrained(base_model, ADAPTER_PATH)   # apply LoRA adapter
-ft_model.eval()
+    // 2. Create fine-tuning job
+    // POST https://<account>.openai.azure.com/openai/fine_tuning/jobs
+    //   body: { "training_file": "<file-id>", "model": "gpt-4o-mini-2024-07-18",
+    //           "suffix": "foundry-workshop" }
 
-prompt   = create_classification_prompt("Cabin pressure dropping rapidly; crew donned masks; leak unisolated.")
-messages = [{"role": "system", "content": prompt["system"]},
-            {"role": "user",   "content": prompt["user"]}]
-inputs   = tokenizer.apply_chat_template(messages, add_generation_prompt=True,
-                                         return_tensors="pt", return_dict=True).to(device)
-with torch.no_grad():
-    out = ft_model.generate(**inputs, max_new_tokens=80, do_sample=False)
-print(tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True))"""),
+    // 3. Poll until job completes
+    // GET https://<account>.openai.azure.com/openai/fine_tuning/jobs/<job-id>
+
+    // 4. Deploy fine-tuned model and use its deployment name as STUDENT_MODEL
+    \"\"\");"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -356,10 +292,21 @@ offline inference — beating the base model on your task.** Next: bring it all 
 in the capstone.
 """ + next_link("15-capstone", "M15 · Capstone")),
 ]
+    # Extra Java cells
+    code("""\
+// ── 3. Compare teacher vs student (using the same model here as placeholder) ──
+System.out.println("=== Step 3: Teacher vs student comparison ===");
+String holdOutPrompt = "In one sentence, what makes Azure AI Foundry enterprise-ready?";
+System.out.println("Hold-out prompt: " + holdOutPrompt);
+System.out.println();
+
+String teacherResp = chat(client, config.chatModel, holdOutPrompt);
+System.out.println("Teacher (" + config.chatModel + "): " + teacherResp);
+System.out.println();
+System.out.println("Student: [deploy your fine-tuned model and set STUDENT_MODEL in .env]");"""),
+
 
 write_notebook(
     "docs/modules/14-fine-tuning-distillation.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )

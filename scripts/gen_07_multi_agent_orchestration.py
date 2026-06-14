@@ -17,9 +17,6 @@ on orchestration.
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M7 · Multi-Agent Orchestration
@@ -56,18 +53,10 @@ The usual project variables, plus `SEARCH_ENDPOINT` — read here only so you ca
 **ground** each specialist on a Foundry IQ knowledge base (see the upgrade note in §3).
 The routing pattern itself needs nothing beyond the chat model."""),
     code("""\
-import os
-from dotenv import load_dotenv
-
-load_dotenv()  # reads .env from the repo root
-
-PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-CHAT_MODEL       = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-SEARCH_ENDPOINT  = os.environ.get("SEARCH_ENDPOINT", "")   # optional — for §3 grounding
-
-print("Project :", PROJECT_ENDPOINT)
-print("Model   :", CHAT_MODEL)
-print("Search  :", SEARCH_ENDPOINT or "(not set — specialists run ungrounded)")"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module07MultiAgentOrchestration
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module07MultiAgentOrchestration.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -86,22 +75,30 @@ from the same `AIProjectClient` you've used all workshop — one credential, one
 client — then hand that client to every agent we create. `Agent` is the framework's
 unit: a model client + instructions + a name."""),
     code("""\
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-from agent_framework import Agent
-from agent_framework.azure import AzureAIAgentClient
-
-credential     = DefaultAzureCredential()
-project_client = AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-
-# One Agent Framework client, wired to the project; reused by every agent below.
-chat_client = AzureAIAgentClient(
-    project_client=project_client,
-    model_deployment_name=CHAT_MODEL,
-)
-
-print("project_client :", "ready")
-print("chat_client    :", "ready (AzureAIAgentClient)")"""),
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.FunctionDefinition;
+import com.azure.ai.agents.persistent.models.FunctionToolDefinition;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RequiredFunctionToolCall;
+import com.azure.ai.agents.persistent.models.RequiredToolCall;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.SubmitToolOutputsAction;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.ToolOutput;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
+import com.azure.core.credential.TokenCredential;
+import com.azure.core.util.BinaryData;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
+import java.util.List;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -118,34 +115,9 @@ Three domain experts, each a plain `Agent` with a focused system prompt. Tight i
 are what keep a specialist on-topic — the HR agent won't wander into product specs. We give
 each a clear `name` (the router's targets) and `description`."""),
     code("""\
-def specialist(name: str, domain: str, expertise: str) -> Agent:
-    \"\"\"Build a domain specialist agent with focused instructions.\"\"\"
-    return Agent(
-        client=chat_client,
-        name=name,
-        description=f"Contoso {domain} specialist.",
-        instructions=(
-            f"You are the Contoso {domain} Specialist, an expert on {expertise}. "
-            "Answer accurately and concisely. If a question falls outside your domain, "
-            "say so plainly rather than guessing. Respond in plain text."
-        ),
-    )
-
-hr_agent = specialist(
-    "contoso-hr-agent", "HR",
-    "policies, benefits, PTO, onboarding, performance reviews, and compensation",
-)
-marketing_agent = specialist(
-    "contoso-marketing-agent", "Marketing",
-    "campaigns, brand guidelines, social media, email marketing, SEO, and competitors",
-)
-products_agent = specialist(
-    "contoso-products-agent", "Products",
-    "Contoso product specs, features, pricing, and availability",
-)
-
-for a in (hr_agent, marketing_agent, products_agent):
-    print(f"  {a.name}")"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -177,23 +149,18 @@ The orchestrator is itself an `Agent` — but a tiny one. Its only job is **clas
 read the question, emit exactly one label (`HR`, `MARKETING`, or `PRODUCTS`). No prose, no
 answer. Constraining the output to a single word makes routing reliable."""),
     code("""\
-orchestrator = Agent(
-    client=chat_client,
-    name="contoso-orchestrator",
-    description="Routes Contoso queries to the HR, Marketing, or Products specialist.",
-    instructions=(
-        "You are a query routing assistant for Contoso. Classify the user's question into "
-        "exactly one domain and respond with ONLY that label:\\n"
-        "- HR        : policies, benefits, PTO, onboarding, performance, compensation\\n"
-        "- MARKETING : campaigns, brand, social media, email, SEO, competitors\\n"
-        "- PRODUCTS  : product specs, features, pricing, availability\\n"
-        "Respond with exactly one word: HR, MARKETING, or PRODUCTS. No punctuation."
-    ),
-)
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-# Sanity-check the classifier on its own before wiring the graph.
-probe = await orchestrator.run("How many PTO days do I accrue after 5 years?")
-print("Classification:", probe.text.strip())"""),
+System.out.println("Project : " + config.projectEndpoint);
+System.out.println("Model   : " + config.chatModel);
+System.out.println();
+
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
+PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -210,34 +177,21 @@ start node, and an **`add_switch_case_edge_group`** routes its output to the fir
 `Case` — or the `Default`. The case conditions inspect the classifier's text (which arrives
 wrapped as an `AgentExecutorResponse`, so we read `.agent_response.text`)."""),
     code("""\
-from agent_framework import WorkflowBuilder, WorkflowAgent, Case, Default
+// ── 1. Create specialist agents ────────────────────────────────────────
+PersistentAgent hrAgent = createSpecialist(projectClient, config.chatModel, "hr-specialist",
+    "You are an HR specialist. Answer questions about hiring, benefits, and people policies. " +
+    "Be concise and professional.");
 
-def _is_hr(r) -> bool:
-    text = str(r.agent_response.text).upper()
-    return "HR" in text and "MARKETING" not in text
+PersistentAgent marketingAgent = createSpecialist(projectClient, config.chatModel, "marketing-specialist",
+    "You are a Marketing specialist. Answer questions about brand, campaigns, and growth. " +
+    "Be creative and data-driven.");
 
-def _is_marketing(r) -> bool:
-    return "MARKETING" in str(r.agent_response.text).upper()
+PersistentAgent productsAgent = createSpecialist(projectClient, config.chatModel, "products-specialist",
+    "You are a Products specialist. Answer questions about features, roadmap, and pricing. " +
+    "Be precise and customer-focused.");
 
-workflow = (
-    WorkflowBuilder(
-        start_executor=orchestrator,
-        output_executors=[hr_agent, marketing_agent, products_agent],
-    )
-    .add_switch_case_edge_group(
-        source=orchestrator,
-        cases=[
-            Case(condition=_is_hr,        target=hr_agent),
-            Case(condition=_is_marketing, target=marketing_agent),
-            Default(target=products_agent),       # Products is the catch-all
-        ],
-    )
-    .build()
-)
-
-# Wrap the graph so it can be invoked like a single agent.
-team = WorkflowAgent(workflow, name="contoso-team")
-print("Workflow built — orchestrator → {hr | marketing | products}")"""),
+System.out.println("Specialists ready: hr, marketing, products");
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -253,17 +207,18 @@ Invoke the wrapped workflow exactly like a single agent — `await team.run(ques
 the graph does the rest: classify, dispatch, answer. Send one question per domain and watch
 each land on the right specialist."""),
     code("""\
-QUERIES = [
-    "What is Contoso's remote work policy?",
-    "What are the key elements of the Contoso brand guidelines?",
-    "What are the specifications of the ContosoBook Pro laptop?",
-]
-
-for q in QUERIES:
-    result = await team.run(q)
-    print(f"Q: {q}")
-    print(f"A: {result.text.strip()[:160]}...")
-    print()"""),
+// ── 2. Create the router agent ─────────────────────────────────────────
+FunctionToolDefinition routeTool = buildRouteTool();
+PersistentAgent router = projectClient.getPersistentAgentsAdministrationClient().createAgent(
+    new CreateAgentOptions(config.chatModel)
+        .setName("router-agent")
+        .setInstructions("You are a router. Classify each user question into " +
+            "exactly one domain: 'hr', 'marketing', or 'products'. " +
+            "Call the route_to tool with your classification.")
+        .setTools(List.of(routeTool))
+);
+System.out.println("Router agent ready");
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -310,10 +265,40 @@ to three domain specialists — multi-agent orchestration in ~40 lines.** Next: 
 that plans and iterates like a research analyst.
 """ + next_link("08-deep-research", "M8 · Deep Research")),
 ]
+    # Extra Java cells
+    code("""\
+// ── 3. Route and answer sample questions ───────────────────────────────
+List<String> questions = List.of(
+    "What is our parental leave policy?",
+    "How can we improve our social media engagement?",
+    "When will the new API versioning feature ship?"
+);
+
+for (String question : questions) {
+    System.out.println("Q: " + question);
+    String domain = route(projectClient, router, question);
+    System.out.println("  → routed to: " + domain);
+
+    PersistentAgent specialist = switch (domain) {
+        case "hr" -> hrAgent;
+        case "marketing" -> marketingAgent;
+        case "products" -> productsAgent;
+        default -> throw new IllegalStateException("Unknown domain: " + domain);
+    };
+
+    String answer = ask(projectClient, specialist, question);
+    System.out.println("  A: " + answer);
+    System.out.println();
+}
+
+// Clean up
+projectClient.getPersistentAgentsAdministrationClient().deleteAgent(router.getId());
+projectClient.getPersistentAgentsAdministrationClient().deleteAgent(hrAgent.getId());
+projectClient.getPersistentAgentsAdministrationClient().deleteAgent(marketingAgent.getId());
+projectClient.getPersistentAgentsAdministrationClient().deleteAgent(productsAgent.getId());"""),
+
 
 write_notebook(
     "docs/modules/07-multi-agent-orchestration.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )
