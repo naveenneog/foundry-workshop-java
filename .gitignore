@@ -3,8 +3,12 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
-build/
 dist/
+
+# Java / Maven
+target/
+*.class
+*.jar
 
 # Virtual envs
 .venv/

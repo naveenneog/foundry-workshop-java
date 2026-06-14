@@ -1,20 +1,22 @@
 package com.microsoft.foundry.workshop;
 
-import com.azure.ai.projects.AIProjectClient;
-import com.azure.ai.projects.AIProjectClientBuilder;
-import com.azure.ai.projects.models.Agent;
-import com.azure.ai.projects.models.AgentThread;
-import com.azure.ai.projects.models.CreateAgentOptions;
-import com.azure.ai.projects.models.CreateRunOptions;
-import com.azure.ai.projects.models.FunctionDefinition;
-import com.azure.ai.projects.models.FunctionToolDefinition;
-import com.azure.ai.projects.models.MessageRole;
-import com.azure.ai.projects.models.RequiredFunctionToolCall;
-import com.azure.ai.projects.models.RunStatus;
-import com.azure.ai.projects.models.SubmitToolOutputsAction;
-import com.azure.ai.projects.models.ThreadMessage;
-import com.azure.ai.projects.models.ThreadRun;
-import com.azure.ai.projects.models.ToolOutput;
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.FunctionDefinition;
+import com.azure.ai.agents.persistent.models.FunctionToolDefinition;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RequiredFunctionToolCall;
+import com.azure.ai.agents.persistent.models.RequiredToolCall;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.SubmitToolOutputsAction;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.ToolOutput;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
 import com.azure.core.credential.TokenCredential;
 import com.azure.core.util.BinaryData;
 import com.azure.identity.DefaultAzureCredentialBuilder;
@@ -25,7 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * M7 · Multi-Agent Orchestration
+ * M7 · Multi-PersistentAgent Orchestration
  *
  * <p>Goal: coordinate a team of specialist agents behind a router — one classifies
  * intent, three answer in their domain (HR, Marketing, Products).
@@ -48,21 +50,21 @@ public class Module07MultiAgentOrchestration {
         System.out.println();
 
         TokenCredential credential = new DefaultAzureCredentialBuilder().build();
-        AIProjectClient projectClient = new AIProjectClientBuilder()
+        PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
             .endpoint(config.projectEndpoint)
             .credential(credential)
             .buildClient();
 
         // ── 1. Create specialist agents ────────────────────────────────────────
-        Agent hrAgent = createSpecialist(projectClient, config.chatModel, "hr-specialist",
+        PersistentAgent hrAgent = createSpecialist(projectClient, config.chatModel, "hr-specialist",
             "You are an HR specialist. Answer questions about hiring, benefits, and people policies. " +
             "Be concise and professional.");
 
-        Agent marketingAgent = createSpecialist(projectClient, config.chatModel, "marketing-specialist",
+        PersistentAgent marketingAgent = createSpecialist(projectClient, config.chatModel, "marketing-specialist",
             "You are a Marketing specialist. Answer questions about brand, campaigns, and growth. " +
             "Be creative and data-driven.");
 
-        Agent productsAgent = createSpecialist(projectClient, config.chatModel, "products-specialist",
+        PersistentAgent productsAgent = createSpecialist(projectClient, config.chatModel, "products-specialist",
             "You are a Products specialist. Answer questions about features, roadmap, and pricing. " +
             "Be precise and customer-focused.");
 
@@ -71,7 +73,7 @@ public class Module07MultiAgentOrchestration {
 
         // ── 2. Create the router agent ─────────────────────────────────────────
         FunctionToolDefinition routeTool = buildRouteTool();
-        Agent router = projectClient.getAgentsClient().createAgent(
+        PersistentAgent router = projectClient.getPersistentAgentsAdministrationClient().createAgent(
             new CreateAgentOptions(config.chatModel)
                 .setName("router-agent")
                 .setInstructions("You are a router. Classify each user question into " +
@@ -94,7 +96,7 @@ public class Module07MultiAgentOrchestration {
             String domain = route(projectClient, router, question);
             System.out.println("  → routed to: " + domain);
 
-            Agent specialist = switch (domain) {
+            PersistentAgent specialist = switch (domain) {
                 case "hr" -> hrAgent;
                 case "marketing" -> marketingAgent;
                 case "products" -> productsAgent;
@@ -107,15 +109,15 @@ public class Module07MultiAgentOrchestration {
         }
 
         // Clean up
-        projectClient.getAgentsClient().deleteAgent(router.getId());
-        projectClient.getAgentsClient().deleteAgent(hrAgent.getId());
-        projectClient.getAgentsClient().deleteAgent(marketingAgent.getId());
-        projectClient.getAgentsClient().deleteAgent(productsAgent.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(router.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(hrAgent.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(marketingAgent.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(productsAgent.getId());
     }
 
-    private static Agent createSpecialist(
-            AIProjectClient client, String model, String name, String instructions) {
-        return client.getAgentsClient().createAgent(
+    private static PersistentAgent createSpecialist(
+            PersistentAgentsClient client, String model, String name, String instructions) {
+        return client.getPersistentAgentsAdministrationClient().createAgent(
             new CreateAgentOptions(model).setName(name).setInstructions(instructions)
         );
     }
@@ -143,27 +145,26 @@ public class Module07MultiAgentOrchestration {
     /**
      * Ask the router to classify a question; return the domain string.
      */
-    private static String route(AIProjectClient client, Agent router, String question)
+    private static String route(PersistentAgentsClient client, PersistentAgent router, String question)
             throws Exception {
-        AgentThread thread = client.getAgentsClient().createThread();
-        client.getAgentsClient().createMessage(thread.getId(), MessageRole.USER, question);
-        ThreadRun run = client.getAgentsClient().createRun(
-            thread.getId(), new CreateRunOptions(router.getId())
-        );
+        PersistentAgentThread thread = client.getThreadsClient().createThread();
+        client.getMessagesClient().createMessage(thread.getId(), MessageRole.USER, question);
+        ThreadRun run = client.getRunsClient().createRun(
+                new CreateRunOptions(thread.getId(), router.getId()));
 
         while (true) {
             Thread.sleep(1_000);
-            run = client.getAgentsClient().getRun(thread.getId(), run.getId());
+            run = client.getRunsClient().getRun(thread.getId(), run.getId());
 
             if (run.getStatus() == RunStatus.REQUIRES_ACTION) {
                 SubmitToolOutputsAction action = (SubmitToolOutputsAction) run.getRequiredAction();
-                RequiredFunctionToolCall call = action.getSubmitToolOutputs().getToolCalls().get(0);
+                RequiredFunctionToolCall call = (RequiredFunctionToolCall) action.getSubmitToolOutputs().getToolCalls().get(0);
                 JsonNode args = MAPPER.readTree(call.getFunction().getArguments());
                 String domain = args.get("domain").asText();
                 // Submit a placeholder output so the run can complete
-                client.getAgentsClient().submitToolOutputsToRun(
+                client.getRunsClient().submitToolOutputsToRun(
                     thread.getId(), run.getId(),
-                    List.of(new ToolOutput(call.getId(), "ok"))
+                    List.of(new ToolOutput().setToolCallId(call.getId()).setOutput("ok"))
                 );
                 return domain;
             }
@@ -178,27 +179,25 @@ public class Module07MultiAgentOrchestration {
     /**
      * Ask a specialist a question and return its answer.
      */
-    private static String ask(AIProjectClient client, Agent specialist, String question)
+    private static String ask(PersistentAgentsClient client, PersistentAgent specialist, String question)
             throws InterruptedException {
-        AgentThread thread = client.getAgentsClient().createThread();
-        client.getAgentsClient().createMessage(thread.getId(), MessageRole.USER, question);
-        ThreadRun run = client.getAgentsClient().createRun(
-            thread.getId(), new CreateRunOptions(specialist.getId())
-        );
+        PersistentAgentThread thread = client.getThreadsClient().createThread();
+        client.getMessagesClient().createMessage(thread.getId(), MessageRole.USER, question);
+        ThreadRun run = client.getRunsClient().createRun(
+                new CreateRunOptions(thread.getId(), specialist.getId()));
 
         while (run.getStatus() == RunStatus.IN_PROGRESS
             || run.getStatus() == RunStatus.QUEUED) {
             Thread.sleep(1_000);
-            run = client.getAgentsClient().getRun(thread.getId(), run.getId());
+            run = client.getRunsClient().getRun(thread.getId(), run.getId());
         }
 
-        List<ThreadMessage> messages = client.getAgentsClient()
-            .listMessages(thread.getId()).stream().toList();
+        List<ThreadMessage> messages = client.getMessagesClient().listMessages(thread.getId()).stream().toList();
         for (ThreadMessage msg : messages) {
-            if (msg.getRole() == MessageRole.ASSISTANT) {
+            if (msg.getRole() == MessageRole.AGENT) {
                 return msg.getContent().stream()
                     .filter(c -> "text".equals(c.getType()))
-                    .map(c -> c.asText().getText().getValue())
+                    .map(c -> { MessageTextContent tc = (MessageTextContent) c; return tc.getText().getValue(); })
                     .findFirst().orElse("");
             }
         }

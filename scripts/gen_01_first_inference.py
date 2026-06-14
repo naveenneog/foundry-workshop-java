@@ -6,9 +6,6 @@ DefaultAzureCredential (no APIM gateway, no team spokes).
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M1 · First Inference
@@ -35,18 +32,10 @@ Every lab reads the same variables from your `.env` (see
 """ + page_link("setup", "Setup") + """). We load them and grab the two model
 deployment names we'll use here."""),
     code("""\
-import os
-from dotenv import load_dotenv
-
-load_dotenv()  # reads .env from the repo root
-
-PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-CHAT_MODEL       = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-EMBEDDING_MODEL  = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
-
-print("Project :", PROJECT_ENDPOINT)
-print("Chat    :", CHAT_MODEL)
-print("Embed   :", EMBEDDING_MODEL)"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module01FirstInference
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module01FirstInference.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -64,15 +53,20 @@ production). `AIProjectClient` is constructed from the project endpoint + that
 credential; `get_openai_client()` returns the OpenAI-compatible client wired to your
 project."""),
     code("""\
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-
-credential     = DefaultAzureCredential()
-project_client = AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-openai_client  = project_client.get_openai_client()
-
-print("project_client : ready")
-print("openai_client  : ready")"""),
+import com.azure.ai.openai.OpenAIClient;
+import com.azure.ai.openai.OpenAIClientBuilder;
+import com.azure.ai.openai.models.ChatCompletions;
+import com.azure.ai.openai.models.ChatCompletionsOptions;
+import com.azure.ai.openai.models.ChatRequestMessage;
+import com.azure.ai.openai.models.ChatRequestSystemMessage;
+import com.azure.ai.openai.models.ChatRequestUserMessage;
+import com.azure.ai.openai.models.Embeddings;
+import com.azure.ai.openai.models.EmbeddingsOptions;
+import com.azure.core.credential.TokenCredential;
+import com.azure.core.util.IterableStream;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import java.util.Arrays;
+import java.util.List;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -89,18 +83,9 @@ print("openai_client  : ready")"""),
 The classic chat surface. You pass the **deployment name** (not a raw model id) and a
 list of messages."""),
     code("""\
-response = openai_client.chat.completions.create(
-    model=CHAT_MODEL,
-    messages=[
-        {"role": "system", "content": "You are a concise technical assistant."},
-        {"role": "user",   "content": "What is catastrophic forgetting in neural networks?"},
-    ],
-)
-
-print("Model  :", response.model)
-print("Tokens :", response.usage.total_tokens)
-print()
-print(response.choices[0].message.content)"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -118,19 +103,13 @@ Turn text into vectors — the foundation for retrieval. You'll lean on this in
 """ + sibling_link("04-grounding-rag-foundry-iq", "M4 · Grounding/RAG") + """. One call
 embeds a batch of strings."""),
     code("""\
-texts = [
-    "Microsoft Foundry centralises model governance behind one platform.",
-    "Embeddings turn text into vectors for semantic search.",
-    "Each project authenticates with DefaultAzureCredential.",
-]
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-result = openai_client.embeddings.create(model=EMBEDDING_MODEL, input=texts)
-
-print("Model      :", EMBEDDING_MODEL)
-print("Dimensions :", len(result.data[0].embedding))
-for i, item in enumerate(result.data):
-    v = item.embedding
-    print(f"[{i}] [{v[0]:.4f}, {v[1]:.4f}, {v[2]:.4f}, ...]  ({len(v)} dims)")"""),
+System.out.println("Project : " + config.projectEndpoint);
+System.out.println("Chat    : " + config.chatModel);
+System.out.println("Embed   : " + config.embeddingModel);
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -147,16 +126,16 @@ for i, item in enumerate(result.data):
 For responsive UIs, stream tokens as they're generated instead of waiting for the full
 response."""),
     code("""\
-stream = openai_client.chat.completions.create(
-    model=CHAT_MODEL,
-    messages=[{"role": "user", "content": "In one sentence, what is Microsoft Foundry?"}],
-    stream=True,
-)
+// ── 1. Build the Azure OpenAI client ──────────────────────────────────
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
 
-for chunk in stream:
-    if chunk.choices and chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="", flush=True)
-print()"""),
+OpenAIClient openAIClient = new OpenAIClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();
+
+System.out.println("openAIClient : ready");
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     The sentence prints **incrementally**, a few tokens at a time:
@@ -172,12 +151,10 @@ The **Responses API** is the modern, stateful surface that powers **agents** and
 **tools** in every later lab. The minimal call takes a model and an `input`; the reply
 is in `output_text`."""),
     code("""\
-response = openai_client.responses.create(
-    model=CHAT_MODEL,
-    input="Name a planet with rings, in one short sentence.",
-)
-
-print(response.output_text)"""),
+// ── 2. Chat completions ───────────────────────────────────────────────
+System.out.println("=== Chat Completions ===");
+chatCompletions(openAIClient, config.chatModel);
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -207,10 +184,20 @@ print(response.output_text)"""),
 Next: wrap a model in a versioned **agent** and invoke it.
 """ + next_link("02-your-first-agent", "M2 · Your First Agent")),
 ]
+    # Extra Java cells
+    code("""\
+// ── 3. Embeddings ─────────────────────────────────────────────────────
+System.out.println("=== Embeddings ===");
+embeddings(openAIClient, config.embeddingModel);
+System.out.println();"""),
+    code("""\
+// ── 4. Streaming ──────────────────────────────────────────────────────
+System.out.println("=== Streaming ===");
+streamingChat(openAIClient, config.chatModel);
+System.out.println();"""),
+
 
 write_notebook(
     "docs/modules/01-first-inference.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )

@@ -1,22 +1,23 @@
 package com.microsoft.foundry.workshop;
 
-import com.azure.ai.projects.AIProjectClient;
-import com.azure.ai.projects.AIProjectClientBuilder;
-import com.azure.ai.projects.models.Agent;
-import com.azure.ai.projects.models.AgentThread;
-import com.azure.ai.projects.models.CreateAgentOptions;
-import com.azure.ai.projects.models.CreateRunOptions;
-import com.azure.ai.projects.models.MessageRole;
-import com.azure.ai.projects.models.RunStatus;
-import com.azure.ai.projects.models.ThreadMessage;
-import com.azure.ai.projects.models.ThreadRun;
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
 import com.azure.core.credential.TokenCredential;
 import com.azure.identity.DefaultAzureCredentialBuilder;
 
 import java.util.List;
 
 /**
- * M6 · Agent Memory
+ * M6 · PersistentAgent Memory
  *
  * <p>Goal: give an agent cross-turn context — let it remember what the user said
  * in earlier turns of the same conversation.
@@ -40,13 +41,13 @@ public class Module06AgentMemory {
         System.out.println();
 
         TokenCredential credential = new DefaultAzureCredentialBuilder().build();
-        AIProjectClient projectClient = new AIProjectClientBuilder()
+        PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
             .endpoint(config.projectEndpoint)
             .credential(credential)
             .buildClient();
 
         // ── 1. Create a stateful agent ─────────────────────────────────────────
-        Agent agent = projectClient.getAgentsClient().createAgent(
+        PersistentAgent agent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
             new CreateAgentOptions(config.chatModel)
                 .setName("memory-agent")
                 .setInstructions("You are a helpful assistant with a good memory. " +
@@ -54,11 +55,11 @@ public class Module06AgentMemory {
                     "it naturally in later replies.")
         );
 
-        System.out.println("Agent created: " + agent.getName());
+        System.out.println("PersistentAgent created: " + agent.getName());
         System.out.println();
 
         // ── 2. Create one thread and reuse it for all turns ────────────────────
-        AgentThread thread = projectClient.getAgentsClient().createThread();
+        PersistentAgentThread thread = projectClient.getThreadsClient().createThread();
         System.out.println("Thread id: " + thread.getId());
         System.out.println();
 
@@ -83,18 +84,17 @@ public class Module06AgentMemory {
 
         // ── 4. Show the full message history stored in the thread ──────────────
         System.out.println("=== Full thread history ===");
-        List<ThreadMessage> history = projectClient.getAgentsClient()
-            .listMessages(thread.getId()).stream().toList();
+        List<ThreadMessage> history = projectClient.getMessagesClient().listMessages(thread.getId()).stream().toList();
         System.out.println("Total messages in thread: " + history.size());
         history.forEach(msg -> {
             String text = msg.getContent().stream()
                 .filter(c -> "text".equals(c.getType()))
-                .map(c -> c.asText().getText().getValue())
+                .map(c -> { MessageTextContent tc = (MessageTextContent) c; return tc.getText().getValue(); })
                 .findFirst().orElse("");
             System.out.printf("[%s] %s%n", msg.getRole(), text);
         });
 
-        projectClient.getAgentsClient().deleteAgent(agent.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agent.getId());
     }
 
     /**
@@ -104,32 +104,30 @@ public class Module06AgentMemory {
      * message history on every run.
      */
     public static String sendTurn(
-            AIProjectClient client, AgentThread thread, Agent agent,
+            PersistentAgentsClient client, PersistentAgentThread thread, PersistentAgent agent,
             String userMessage) throws InterruptedException {
 
-        client.getAgentsClient().createMessage(thread.getId(), MessageRole.USER, userMessage);
+        client.getMessagesClient().createMessage(thread.getId(), MessageRole.USER, userMessage);
 
-        ThreadRun run = client.getAgentsClient().createRun(
-            thread.getId(), new CreateRunOptions(agent.getId())
-        );
+        ThreadRun run = client.getRunsClient().createRun(
+                new CreateRunOptions(thread.getId(), agent.getId()));
 
         while (run.getStatus() == RunStatus.IN_PROGRESS
             || run.getStatus() == RunStatus.QUEUED) {
             Thread.sleep(1_000);
-            run = client.getAgentsClient().getRun(thread.getId(), run.getId());
+            run = client.getRunsClient().getRun(thread.getId(), run.getId());
         }
 
         if (run.getStatus() != RunStatus.COMPLETED) {
             throw new RuntimeException("Run failed: " + run.getStatus());
         }
 
-        List<ThreadMessage> messages = client.getAgentsClient()
-            .listMessages(thread.getId()).stream().toList();
+        List<ThreadMessage> messages = client.getMessagesClient().listMessages(thread.getId()).stream().toList();
         for (ThreadMessage msg : messages) {
-            if (msg.getRole() == MessageRole.ASSISTANT) {
+            if (msg.getRole() == MessageRole.AGENT) {
                 return msg.getContent().stream()
                     .filter(c -> "text".equals(c.getType()))
-                    .map(c -> c.asText().getText().getValue())
+                    .map(c -> { MessageTextContent tc = (MessageTextContent) c; return tc.getText().getValue(); })
                     .findFirst().orElse("");
             }
         }

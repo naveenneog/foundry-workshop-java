@@ -33,7 +33,7 @@
         <azure.sdk.bom.version>1.2.32</azure.sdk.bom.version>
 
         <!-- Versions not covered by the BOM -->
-        <azure.ai.projects.version>1.0.0-beta.2</azure.ai.projects.version>
+        <azure.ai.agents.version>1.0.0-beta.2</azure.ai.agents.version>
         <azure.ai.openai.version>1.0.0-beta.16</azure.ai.openai.version>
         <azure.monitor.exporter.version>1.0.0-beta.28</azure.monitor.exporter.version>
         <dotenv.java.version>3.2.0</dotenv.java.version>
@@ -63,11 +63,11 @@
 
         <!-- ── Core Azure AI Foundry ─────────────────────────────────────── -->
 
-        <!-- Azure AI Projects — agent creation, versioning, knowledge bases -->
+        <!-- Azure AI Agents Persistent — agent creation, threads, runs, messages -->
         <dependency>
             <groupId>com.azure</groupId>
-            <artifactId>azure-ai-projects</artifactId>
-            <version>${azure.ai.projects.version}</version>
+            <artifactId>azure-ai-agents-persistent</artifactId>
+            <version>${azure.ai.agents.version}</version>
         </dependency>
 
         <!-- Azure Identity — DefaultAzureCredential, keyless auth -->

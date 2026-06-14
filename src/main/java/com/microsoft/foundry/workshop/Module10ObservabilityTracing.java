@@ -1,15 +1,16 @@
 package com.microsoft.foundry.workshop;
 
-import com.azure.ai.projects.AIProjectClient;
-import com.azure.ai.projects.AIProjectClientBuilder;
-import com.azure.ai.projects.models.Agent;
-import com.azure.ai.projects.models.AgentThread;
-import com.azure.ai.projects.models.CreateAgentOptions;
-import com.azure.ai.projects.models.CreateRunOptions;
-import com.azure.ai.projects.models.MessageRole;
-import com.azure.ai.projects.models.RunStatus;
-import com.azure.ai.projects.models.ThreadMessage;
-import com.azure.ai.projects.models.ThreadRun;
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
 import com.azure.core.credential.TokenCredential;
 import com.azure.identity.DefaultAzureCredentialBuilder;
 import io.opentelemetry.api.GlobalOpenTelemetry;
@@ -20,8 +21,9 @@ import io.opentelemetry.context.Scope;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
-import com.azure.monitor.opentelemetry.exporter.AzureMonitorTraceExporter;
+
 import com.azure.monitor.opentelemetry.exporter.AzureMonitorExporterBuilder;
+import io.opentelemetry.sdk.trace.export.SpanExporter;
 
 import java.util.List;
 
@@ -58,19 +60,19 @@ public class Module10ObservabilityTracing {
 
         // ── 2. Build clients ───────────────────────────────────────────────────
         TokenCredential credential = new DefaultAzureCredentialBuilder().build();
-        AIProjectClient projectClient = new AIProjectClientBuilder()
+        PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
             .endpoint(config.projectEndpoint)
             .credential(credential)
             .buildClient();
 
         // ── 3. Create an agent ─────────────────────────────────────────────────
-        Agent agent = projectClient.getAgentsClient().createAgent(
+        PersistentAgent agent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
             new CreateAgentOptions(config.chatModel)
                 .setName("traced-agent")
                 .setInstructions("You are a helpful assistant. Answer concisely.")
         );
 
-        System.out.println("Agent created: " + agent.getName());
+        System.out.println("PersistentAgent created: " + agent.getName());
         System.out.println();
 
         // ── 4. Invoke with tracing ─────────────────────────────────────────────
@@ -93,7 +95,7 @@ public class Module10ObservabilityTracing {
         ((OpenTelemetrySdk) GlobalOpenTelemetry.get()).getSdkTracerProvider().forceFlush();
 
         System.out.println("Spans exported. Check your Application Insights instance.");
-        projectClient.getAgentsClient().deleteAgent(agent.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agent.getId());
     }
 
     /**
@@ -106,7 +108,7 @@ public class Module10ObservabilityTracing {
         SdkTracerProvider tracerProvider;
 
         if (!connectionString.isBlank()) {
-            AzureMonitorTraceExporter exporter = new AzureMonitorExporterBuilder()
+            SpanExporter exporter = new AzureMonitorExporterBuilder()
                 .connectionString(connectionString)
                 .buildTraceExporter();
 
@@ -129,7 +131,7 @@ public class Module10ObservabilityTracing {
      * named operation in Application Insights.
      */
     public static String invokeWithTracing(
-            AIProjectClient client, Agent agent, String userMessage)
+            PersistentAgentsClient client, PersistentAgent agent, String userMessage)
             throws InterruptedException {
 
         Span span = tracer.spanBuilder("agent.invoke")
@@ -138,17 +140,16 @@ public class Module10ObservabilityTracing {
             .startSpan();
 
         try (Scope ignored = span.makeCurrent()) {
-            AgentThread thread = client.getAgentsClient().createThread();
-            client.getAgentsClient().createMessage(thread.getId(), MessageRole.USER, userMessage);
+            PersistentAgentThread thread = client.getThreadsClient().createThread();
+            client.getMessagesClient().createMessage(thread.getId(), MessageRole.USER, userMessage);
 
-            ThreadRun run = client.getAgentsClient().createRun(
-                thread.getId(), new CreateRunOptions(agent.getId())
-            );
+            ThreadRun run = client.getRunsClient().createRun(
+                new CreateRunOptions(thread.getId(), agent.getId()));
 
             while (run.getStatus() == RunStatus.IN_PROGRESS
                 || run.getStatus() == RunStatus.QUEUED) {
                 Thread.sleep(1_000);
-                run = client.getAgentsClient().getRun(thread.getId(), run.getId());
+                run = client.getRunsClient().getRun(thread.getId(), run.getId());
             }
 
             if (run.getStatus() != RunStatus.COMPLETED) {
@@ -159,13 +160,12 @@ public class Module10ObservabilityTracing {
             span.setAttribute("run.status", run.getStatus().toString());
             span.setStatus(StatusCode.OK);
 
-            List<ThreadMessage> messages = client.getAgentsClient()
-                .listMessages(thread.getId()).stream().toList();
+            List<ThreadMessage> messages = client.getMessagesClient().listMessages(thread.getId()).stream().toList();
             for (ThreadMessage msg : messages) {
-                if (msg.getRole() == MessageRole.ASSISTANT) {
+                if (msg.getRole() == MessageRole.AGENT) {
                     return msg.getContent().stream()
                         .filter(c -> "text".equals(c.getType()))
-                        .map(c -> c.asText().getText().getValue())
+                        .map(c -> { MessageTextContent tc = (MessageTextContent) c; return tc.getText().getValue(); })
                         .findFirst().orElse("");
                 }
             }

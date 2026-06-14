@@ -1,15 +1,16 @@
 package com.microsoft.foundry.workshop;
 
-import com.azure.ai.projects.AIProjectClient;
-import com.azure.ai.projects.AIProjectClientBuilder;
-import com.azure.ai.projects.models.Agent;
-import com.azure.ai.projects.models.AgentThread;
-import com.azure.ai.projects.models.CreateAgentOptions;
-import com.azure.ai.projects.models.CreateRunOptions;
-import com.azure.ai.projects.models.MessageRole;
-import com.azure.ai.projects.models.RunStatus;
-import com.azure.ai.projects.models.ThreadMessage;
-import com.azure.ai.projects.models.ThreadRun;
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
 import com.azure.core.credential.TokenCredential;
 import com.azure.identity.DefaultAzureCredentialBuilder;
 
@@ -36,13 +37,13 @@ public class Module02YourFirstAgent {
 
         System.out.println("Project : " + config.projectEndpoint);
         System.out.println("Chat    : " + config.chatModel);
-        System.out.println("Agent   : " + AGENT_NAME);
+        System.out.println("PersistentAgent   : " + AGENT_NAME);
         System.out.println();
 
-        // ── 1. Build the AIProjectClient ──────────────────────────────────────
+        // ── 1. Build the PersistentAgentsClient ──────────────────────────────────────
         TokenCredential credential = new DefaultAzureCredentialBuilder().build();
 
-        AIProjectClient projectClient = new AIProjectClientBuilder()
+        PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
             .endpoint(config.projectEndpoint)
             .credential(credential)
             .buildClient();
@@ -52,7 +53,7 @@ public class Module02YourFirstAgent {
 
         // ── 2. Create an agent (v1) ────────────────────────────────────────────
         System.out.println("=== Create agent v1 ===");
-        Agent agentV1 = createStorytellingAgent(projectClient, config.chatModel,
+        PersistentAgent agentV1 = createStorytellingAgent(projectClient, config.chatModel,
             "You are a storytelling agent. " +
             "You craft engaging one-line stories based on user prompts and context.");
 
@@ -69,7 +70,7 @@ public class Module02YourFirstAgent {
 
         // ── 4. Update (version) the agent instructions ────────────────────────
         System.out.println("=== Update agent (v2 — melancholic voice) ===");
-        Agent agentV2 = createStorytellingAgent(projectClient, config.chatModel,
+        PersistentAgent agentV2 = createStorytellingAgent(projectClient, config.chatModel,
             "You are a storytelling agent with a melancholic, noir voice. " +
             "You craft a single haunting sentence based on the user's prompt.");
 
@@ -82,16 +83,16 @@ public class Module02YourFirstAgent {
         System.out.println(replyV2);
 
         // Clean up — delete agents to avoid orphaned resources
-        projectClient.getAgentsClient().deleteAgent(agentV1.getId());
-        projectClient.getAgentsClient().deleteAgent(agentV2.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agentV1.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agentV2.getId());
     }
 
     /**
      * Create (or recreate) a storytelling agent with the given instructions.
      */
-    public static Agent createStorytellingAgent(
-            AIProjectClient client, String chatModel, String instructions) {
-        return client.getAgentsClient().createAgent(
+    public static PersistentAgent createStorytellingAgent(
+            PersistentAgentsClient client, String chatModel, String instructions) {
+        return client.getPersistentAgentsAdministrationClient().createAgent(
             new CreateAgentOptions(chatModel)
                 .setName(AGENT_NAME)
                 .setInstructions(instructions)
@@ -103,24 +104,22 @@ public class Module02YourFirstAgent {
      * and return the assistant's reply text.
      */
     public static String invokeAgent(
-            AIProjectClient client, Agent agent, String userMessage)
+            PersistentAgentsClient client, PersistentAgent agent, String userMessage)
             throws InterruptedException {
 
         // Create a thread for this conversation turn
-        AgentThread thread = client.getAgentsClient().createThread();
+        PersistentAgentThread thread = client.getThreadsClient().createThread();
 
         // Post the user message
-        client.getAgentsClient().createMessage(
+        client.getMessagesClient().createMessage(
             thread.getId(),
             MessageRole.USER,
             userMessage
         );
 
         // Start a run
-        ThreadRun run = client.getAgentsClient().createRun(
-            thread.getId(),
-            new CreateRunOptions(agent.getId())
-        );
+        ThreadRun run = client.getRunsClient().createRun(
+                new CreateRunOptions(thread.getId(), agent.getId()));
 
         // Poll until the run is no longer in-progress
         run = pollUntilDone(client, thread.getId(), run.getId());
@@ -130,16 +129,15 @@ public class Module02YourFirstAgent {
         }
 
         // Retrieve the last assistant message
-        List<ThreadMessage> messages = client.getAgentsClient()
-            .listMessages(thread.getId())
+        List<ThreadMessage> messages = client.getMessagesClient().listMessages(thread.getId())
             .stream()
             .toList();
 
         for (ThreadMessage msg : messages) {
-            if (msg.getRole() == MessageRole.ASSISTANT) {
+            if (msg.getRole() == MessageRole.AGENT) {
                 return msg.getContent().stream()
                     .filter(c -> "text".equals(c.getType()))
-                    .map(c -> c.asText().getText().getValue())
+                    .map(c -> { MessageTextContent tc = (MessageTextContent) c; return tc.getText().getValue(); })
                     .findFirst()
                     .orElse("");
             }
@@ -148,12 +146,12 @@ public class Module02YourFirstAgent {
     }
 
     private static ThreadRun pollUntilDone(
-            AIProjectClient client, String threadId, String runId)
+            PersistentAgentsClient client, String threadId, String runId)
             throws InterruptedException {
         ThreadRun run;
         do {
             Thread.sleep(1_000);
-            run = client.getAgentsClient().getRun(threadId, runId);
+            run = client.getRunsClient().getRun(threadId, runId);
         } while (run.getStatus() == RunStatus.IN_PROGRESS
               || run.getStatus() == RunStatus.QUEUED);
         return run;

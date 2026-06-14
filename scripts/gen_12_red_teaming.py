@@ -24,9 +24,6 @@ Sample scorecard numbers below are the reference's actual basic-scan output
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M12 · Red Teaming
@@ -65,21 +62,10 @@ Same `.env` as every lab. The Red Teaming Agent needs your **project endpoint**
 (it logs the scan there) and a model deployment to attack. The reference routes
 through an APIM gateway; we point the target straight at this project."""),
     code("""\
-import os, sys
-from dotenv import load_dotenv
-
-load_dotenv()  # reads .env from the repo root
-
-assert (3, 10) <= sys.version_info < (3, 14), (
-    f"PyRIT requires Python 3.10–3.13; current is {sys.version.split()[0]}."
-)
-
-PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-CHAT_MODEL       = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-
-print("Project :", PROJECT_ENDPOINT)
-print("Model   :", CHAT_MODEL)
-print("Python  :", sys.version.split()[0], "(OK)")"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module12RedTeaming
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module12RedTeaming.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -98,23 +84,17 @@ takes a prompt string and returns the model's reply. We call this project's
 `get_openai_client()` directly — *this is your system under test*. In production
 you'd point the callback at your real app (RAG pipeline, agent, API)."""),
     code("""\
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-
-credential     = DefaultAzureCredential()
-project_client = AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-openai_client  = project_client.get_openai_client()
-
-def target_callback(query: str) -> str:
-    \"\"\"The system under test: forward a prompt to the model, return its reply.\"\"\"
-    response = openai_client.chat.completions.create(
-        model=CHAT_MODEL,
-        messages=[{"role": "user", "content": query}],
-    )
-    return response.choices[0].message.content
-
-# Smoke-test the target before handing it to the scanner.
-print("smoke test:", target_callback("Say hello in one word."))"""),
+import com.azure.ai.openai.OpenAIClient;
+import com.azure.ai.openai.OpenAIClientBuilder;
+import com.azure.ai.openai.models.ChatCompletions;
+import com.azure.ai.openai.models.ChatCompletionsOptions;
+import com.azure.ai.openai.models.ChatRequestSystemMessage;
+import com.azure.ai.openai.models.ChatRequestUserMessage;
+import com.azure.core.credential.TokenCredential;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -132,21 +112,9 @@ a **credential**, the **risk categories** to probe, and `num_objectives` — how
 many distinct attack prompts to generate *per category*. Four categories × 5
 objectives = 20 baseline prompts."""),
     code("""\
-from azure.ai.evaluation.red_team import RedTeam, RiskCategory
-
-red_team = RedTeam(
-    azure_ai_project=PROJECT_ENDPOINT,
-    credential=credential,
-    risk_categories=[
-        RiskCategory.Violence,
-        RiskCategory.HateUnfairness,
-        RiskCategory.Sexual,
-        RiskCategory.SelfHarm,
-    ],
-    num_objectives=5,   # attack prompts per category
-)
-
-print("RedTeam ready — 4 categories × 5 objectives = 20 baseline prompts")"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -163,13 +131,34 @@ the baseline objectives, drives them through your `target_callback`, scores each
 response with PyRIT, and writes results to `output_path`. A 20-prompt scan takes
 a few minutes."""),
     code("""\
-basic_result = await red_team.scan(
-    target=target_callback,
-    scan_name="redteam-basic",
-    output_path="redteam_basic_output",
-)
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-print("✅ basic scan complete — results in redteam_basic_output/")"""),
+System.out.println("Project : " + config.projectEndpoint);
+System.out.println("Chat    : " + config.chatModel);
+System.out.println();
+
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
+OpenAIClient openAIClient = new OpenAIClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();
+
+List<RedTeamResult> results = new ArrayList<>();
+
+System.out.println("=== Red-teaming run ===");
+for (Map.Entry<String, List<String>> entry : ATTACK_LIBRARY.entrySet()) {
+    String category = entry.getKey();
+    for (String attack : entry.getValue()) {
+        RedTeamResult result = probe(openAIClient, config.chatModel, category, attack);
+        results.add(result);
+        System.out.printf("[%s] %s -> %s%n",
+            category, truncate(attack, 60), result.outcome());
+    }
+}
+
+System.out.println();
+printSummary(results);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -189,22 +178,7 @@ The headline metric is **Attack Success Rate (ASR)**: the fraction of adversaria
 prompts that *succeeded* in eliciting harmful content. **Lower is better.** The
 scorecard breaks ASR down by risk category — so you see exactly where your model
 is weakest."""),
-    code("""\
-import json
-from pathlib import Path
-
-results   = json.loads(Path("redteam_basic_output/evaluation_results.json").read_text())
-scorecard = results.get("scorecard", {})
-risk      = scorecard.get("risk_category_summary", [{}])[0]
-
-print(f"{'category':<18}{'ASR':>8}{'success':>9}{'total':>7}")
-print("-" * 42)
-print(f"{'OVERALL':<18}{risk.get('overall_asr', 0):>7.1f}%"
-      f"{risk.get('overall_successful_attacks', 0):>9}{risk.get('overall_total', 0):>7}")
-for cat, key in [("Violence", "violence"), ("Hate/Unfairness", "hate_unfairness"),
-                 ("Sexual", "sexual"), ("Self-Harm", "self_harm")]:
-    print(f"{cat:<18}{risk.get(key + '_asr', 0):>7.1f}%"
-          f"{risk.get(key + '_successful_attacks', 0):>9}{risk.get(key + '_total', 0):>7}")"""),
+,
     md("""\
 !!! note "Expected output"
     ```
@@ -229,30 +203,7 @@ character-spacing, Unicode confusables — and they probe in **other languages**
 `attack_strategies` mutates each objective through these encodings (and
 `AttackStrategy.Compose([...])` chains them); `languages` translates the prompts.
 This is the scan that finds the leaks a baseline misses."""),
-    code("""\
-from azure.ai.evaluation.red_team import AttackStrategy, SupportedLanguages
-
-advanced = RedTeam(
-    azure_ai_project=PROJECT_ENDPOINT,
-    credential=credential,
-    risk_categories=[RiskCategory.Violence, RiskCategory.HateUnfairness],
-    num_objectives=5,
-)
-
-advanced_result = await advanced.scan(
-    target=target_callback,
-    scan_name="redteam-advanced",
-    attack_strategies=[
-        AttackStrategy.Base64,
-        AttackStrategy.ROT13,
-        AttackStrategy.UnicodeConfusable,
-        AttackStrategy.Compose([AttackStrategy.Base64, AttackStrategy.ROT13]),
-    ],
-    languages=[SupportedLanguages.Spanish, SupportedLanguages.French],
-    output_path="redteam_advanced_output",
-)
-
-print("✅ advanced scan complete — strategies + Spanish/French")"""),
+,
     md("""\
 !!! note "Expected output"
     ```
@@ -276,19 +227,7 @@ The advanced scorecard adds an **attack-technique** breakdown alongside the
 risk-category one. The story you're looking for: an encoding strategy that scores
 a *higher* ASR than baseline means that obfuscation slips past your filters — a
 concrete gap to close before you ship."""),
-    code("""\
-adv  = json.loads(Path("redteam_advanced_output/evaluation_results.json").read_text())
-tech = adv.get("scorecard", {}).get("attack_technique_summary", [{}])[0]
-
-print(f"{'technique':<14}{'ASR':>8}{'success':>9}{'total':>7}")
-print("-" * 38)
-for label, key in [("OVERALL", "overall"), ("baseline", "baseline"),
-                   ("easy", "easy_complexity"), ("difficult", "difficult_complexity")]:
-    asr = tech.get(key + "_asr")
-    if asr is None:
-        continue
-    print(f"{label:<14}{asr:>7.1f}%"
-          f"{tech.get(key + '_successful_attacks', 0):>9}{tech.get(key + '_total', 0):>7}")"""),
+,
     md("""\
 !!! note "Expected output"
     ```
@@ -333,6 +272,4 @@ Next: put a human in the loop and drive agents over raw REST.
 write_notebook(
     "docs/modules/12-red-teaming.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )

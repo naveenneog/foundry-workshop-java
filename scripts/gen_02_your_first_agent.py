@@ -7,9 +7,6 @@ models are deployed directly in the project, referenced by plain name).
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M2 · Your First Agent
@@ -38,20 +35,10 @@ If your project and `.env` aren't ready yet, do the """ + page_link("setup", "Se
 Same `.env` as every lab (see """ + page_link("setup", "Setup") + """). We read the
 project endpoint and the chat model deployment, and pick a stable agent name."""),
     code("""\
-import os
-from dotenv import load_dotenv
-
-load_dotenv()  # reads .env from the repo root
-
-PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-CHAT_MODEL       = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-
-# A stable, human-readable name. Re-running these cells versions THIS agent.
-AGENT_NAME = "storytelling-agent"
-
-print("Project :", PROJECT_ENDPOINT)
-print("Chat    :", CHAT_MODEL)
-print("Agent   :", AGENT_NAME)"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module02YourFirstAgent
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module02YourFirstAgent.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -68,15 +55,20 @@ Identical bootstrap to M1: `DefaultAzureCredential` → `AIProjectClient` → an
 OpenAI-compatible client. We also reach `project_client.agents`, the surface for
 creating and versioning agents."""),
     code("""\
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-
-credential     = DefaultAzureCredential()
-project_client = AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-openai_client  = project_client.get_openai_client()
-
-print("project_client : ready")
-print("openai_client  : ready")"""),
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
+import com.azure.core.credential.TokenCredential;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import java.util.List;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -94,21 +86,9 @@ A `PromptAgentDefinition` is the whole agent: the **model** it runs on and the
 """ + sibling_link("03-tools-and-function-calling", "M3") + """.) You hand that
 definition to `create_version`, which stores it under your chosen name."""),
     code("""\
-from azure.ai.projects.models import PromptAgentDefinition
-
-agent = project_client.agents.create_version(
-    agent_name=AGENT_NAME,
-    definition=PromptAgentDefinition(
-        model=CHAT_MODEL,
-        instructions=(
-            "You are a storytelling agent. "
-            "You craft engaging one-line stories based on user prompts and context."
-        ),
-    ),
-)
-
-print("Name    :", agent.name)
-print("Version :", agent.version)"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -129,12 +109,13 @@ instead of passing `model=`, you attach an **`agent_reference`** in `extra_body`
 Foundry resolves the name, applies the stored model + instructions, and returns the
 reply in `output_text`."""),
     code("""\
-response = openai_client.responses.create(
-    input=[{"role": "user", "content": "Tell me a one-line story about a lighthouse keeper."}],
-    extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
-)
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-print(response.output_text)"""),
+System.out.println("Project : " + config.projectEndpoint);
+System.out.println("Chat    : " + config.chatModel);
+System.out.println("PersistentAgent   : " + AGENT_NAME);
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -151,26 +132,16 @@ This is the payoff. Change the **instructions** and call `create_version` again 
 name, new version. Existing callers keep working; you've simply published a new
 revision they can pick up. Here we make the agent gloomier."""),
     code("""\
-agent_v2 = project_client.agents.create_version(
-    agent_name=AGENT_NAME,                       # same name → new version
-    definition=PromptAgentDefinition(
-        model=CHAT_MODEL,
-        instructions=(
-            "You are a storytelling agent with a melancholic, noir voice. "
-            "You craft a single haunting sentence based on the user's prompt."
-        ),
-    ),
-)
+// ── 1. Build the PersistentAgentsClient ──────────────────────────────────────
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
 
-print("Name    :", agent_v2.name)
-print("Version :", agent_v2.version)   # incremented because instructions changed
+PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();
 
-response = openai_client.responses.create(
-    input=[{"role": "user", "content": "Tell me a one-line story about a lighthouse keeper."}],
-    extra_body={"agent_reference": {"name": agent_v2.name, "type": "agent_reference"}},
-)
-print()
-print(response.output_text)"""),
+System.out.println("projectClient : ready");
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -203,10 +174,45 @@ print(response.output_text)"""),
 safely.** Next: give your agent real **tools** — code execution and your own functions.
 """ + next_link("03-tools-and-function-calling", "M3 · Tools & Function Calling")),
 ]
+    # Extra Java cells
+    code("""\
+// ── 2. Create an agent (v1) ────────────────────────────────────────────
+System.out.println("=== Create agent v1 ===");
+PersistentAgent agentV1 = createStorytellingAgent(projectClient, config.chatModel,
+    "You are a storytelling agent. " +
+    "You craft engaging one-line stories based on user prompts and context.");
+
+System.out.println("Name    : " + agentV1.getName());
+System.out.println("Id      : " + agentV1.getId());
+System.out.println();"""),
+    code("""\
+// ── 3. Invoke the agent ────────────────────────────────────────────────
+System.out.println("=== Invoke agent v1 ===");
+String reply = invokeAgent(projectClient, agentV1,
+    "Tell me a one-line story about a lighthouse keeper.");
+System.out.println(reply);
+System.out.println();"""),
+    code("""\
+// ── 4. Update (version) the agent instructions ────────────────────────
+System.out.println("=== Update agent (v2 — melancholic voice) ===");
+PersistentAgent agentV2 = createStorytellingAgent(projectClient, config.chatModel,
+    "You are a storytelling agent with a melancholic, noir voice. " +
+    "You craft a single haunting sentence based on the user's prompt.");
+
+System.out.println("Name : " + agentV2.getName());
+System.out.println("Id   : " + agentV2.getId());
+System.out.println();
+
+String replyV2 = invokeAgent(projectClient, agentV2,
+    "Tell me a one-line story about a lighthouse keeper.");
+System.out.println(replyV2);
+
+// Clean up — delete agents to avoid orphaned resources
+projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agentV1.getId());
+projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agentV2.getId());"""),
+
 
 write_notebook(
     "docs/modules/02-your-first-agent.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )

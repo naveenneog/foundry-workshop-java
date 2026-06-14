@@ -24,9 +24,6 @@ one agent, two invocation surfaces.
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M13 · Human-in-the-Loop & REST
@@ -59,24 +56,10 @@ chain turns with `previous_response_id`, and stream tokens over Server-Sent Even
 The canonical bootstrap. We also name the agent up front — we'll reference it by **name**
 both through the SDK (here) and over REST (later)."""),
     code("""\
-import os, json
-from dotenv import load_dotenv
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-
-load_dotenv()  # reads .env from the repo root
-
-PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-CHAT_MODEL       = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-AGENT_NAME       = "payments-approval-agent"
-
-credential     = DefaultAzureCredential()
-project_client = AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-openai_client  = project_client.get_openai_client()
-
-print("Project    :", PROJECT_ENDPOINT)
-print("Model      :", CHAT_MODEL)
-print("Agent name :", AGENT_NAME)"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module13HumanInTheLoopAndRest
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module13HumanInTheLoopAndRest.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -93,49 +76,31 @@ Two `FunctionTool` schemas. `get_account_balance` is read-only and safe to auto-
 that decides which calls get intercepted — it's *our* policy, not something the model
 enforces. We also keep mock implementations so the demo runs end-to-end."""),
     code("""\
-from azure.ai.projects.models import FunctionTool, PromptAgentDefinition
-
-APPROVAL_REQUIRED_TOOLS = {"transfer_funds"}   # routing convention — intercept these
-
-get_balance_tool = FunctionTool(
-    name="get_account_balance",
-    description="Get the current balance for an account. Safe to execute automatically.",
-    parameters={"type": "object",
-                "properties": {"account_id": {"type": "string"}},
-                "required": ["account_id"]},
-)
-transfer_tool = FunctionTool(
-    name="transfer_funds",
-    description="Transfer funds between accounts. REQUIRES human approval before execution.",
-    parameters={"type": "object",
-                "properties": {"from_account": {"type": "string"},
-                               "to_account":   {"type": "string"},
-                               "amount":       {"type": "number"}},
-                "required": ["from_account", "to_account", "amount"]},
-)
-
-# Mock implementations (no real money moves).
-def get_account_balance(account_id):
-    return f"Account {account_id} balance: ${ {'ACC-001': 5000.0}.get(account_id, 0.0):,.2f}"
-def transfer_funds(from_account, to_account, amount):
-    return f"Transferred ${amount:,.2f} from {from_account} to {to_account}."
-TOOL_IMPL = {"get_account_balance": lambda a: get_account_balance(**a),
-             "transfer_funds":      lambda a: transfer_funds(**a)}
-
-agent = project_client.agents.create_version(
-    agent_name=AGENT_NAME,
-    definition=PromptAgentDefinition(
-        model=CHAT_MODEL,
-        instructions=("You are a banking assistant with two tools: get_account_balance and "
-                      "transfer_funds. Call the tool directly — do not describe what you will "
-                      "do. The system handles human approval for transfer_funds."),
-        tools=[get_balance_tool, transfer_tool],
-    ),
-    description="HITL demo — financial transactions with human approval for transfers.",
-)
-agent_ref = {"agent_reference": {"name": agent.name, "type": "agent_reference"}}
-print(f"Agent '{agent.name}' ready (version {agent.version}).")
-print("Approval-required:", APPROVAL_REQUIRED_TOOLS)"""),
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.FunctionDefinition;
+import com.azure.ai.agents.persistent.models.FunctionToolDefinition;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RequiredFunctionToolCall;
+import com.azure.ai.agents.persistent.models.RequiredToolCall;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.SubmitToolOutputsAction;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.ToolOutput;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
+import com.azure.core.credential.TokenCredential;
+import com.azure.core.util.BinaryData;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -154,40 +119,9 @@ Submit every result back as a `function_call_output` via `previous_response_id` 
 until no tool calls remain. We pass the human decision as an **`approve` callback** so the
 cell stays runnable — in production that callback is a UI prompt, webhook, or queue."""),
     code("""\
-def run_with_hitl(user_message: str, approve) -> str:
-    \"\"\"Run the agent, routing approval-required tool calls through `approve(name, args)`.\"\"\"
-    response = openai_client.responses.create(
-        input=[{"role": "user", "content": user_message}], extra_body=agent_ref)
-
-    while True:
-        calls = [i for i in response.output if i.type == "function_call"]
-        if not calls:
-            break                                   # no tool calls → final answer ready
-
-        outputs = []
-        for call in calls:
-            args = json.loads(call.arguments)
-            if call.name in APPROVAL_REQUIRED_TOOLS:
-                if approve(call.name, args):         # ← human decision point
-                    result = TOOL_IMPL[call.name](args)
-                    print(f"[APPROVED] {call.name}({args}) -> {result}")
-                else:
-                    result = f"Action '{call.name}' was rejected by the operator."
-                    print(f"[REJECTED] {call.name} will not execute")
-            else:
-                result = TOOL_IMPL[call.name](args)  # auto-execute safe tools
-                print(f"[AUTO] {call.name}({args}) -> {result}")
-            outputs.append({"type": "function_call_output",
-                            "call_id": call.call_id, "output": result})
-
-        response = openai_client.responses.create(    # submit results, continue
-            input=outputs, previous_response_id=response.id, extra_body=agent_ref)
-    return response.output_text
-
-print(">>> APPROVE path")
-print(run_with_hitl("Transfer $500 from ACC-001 to ACC-002.", approve=lambda n, a: True))
-print("\\n>>> REJECT path")
-print(run_with_hitl("Transfer $9000 from ACC-001 to ACC-002.", approve=lambda n, a: False))"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -217,34 +151,18 @@ Same agent, no SDK. Every `responses.create(...)` is an HTTPS **POST** to
 audience — the exact scope the SDK uses internally. The body is just the `input` plus the
 `agent_reference` (as a top-level key over the wire, where the SDK put it in `extra_body`)."""),
     code("""\
-import requests
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-responses_url = f"{PROJECT_ENDPOINT.rstrip('/')}/openai/v1/responses"
-access_token  = credential.get_token("https://ai.azure.com/.default").token
-headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+System.out.println("Project : " + config.projectEndpoint);
+System.out.println("Chat    : " + config.chatModel);
+System.out.println();
 
-body = {
-    "input": [{"role": "user", "content": "What is my balance for account ACC-001?"}],
-    "agent_reference": {"name": AGENT_NAME, "type": "agent_reference"},
-}
-
-def output_text(result: dict) -> str:
-    \"\"\"Aggregate visible text from a raw Responses payload.
-
-    The wire JSON has NO top-level `output_text` key — that's a convenience the SDK's typed
-    Response synthesises. Over REST we concatenate the output_text parts ourselves.
-    \"\"\"
-    return "".join(part["text"]
-                   for item in result.get("output", []) if item.get("type") == "message"
-                   for part in item.get("content", []) if part.get("type") == "output_text")
-
-resp = requests.post(responses_url, headers=headers, json=body, timeout=60)
-resp.raise_for_status()
-result = resp.json()
-print("HTTP   :", resp.status_code)
-print("Resp id:", result["id"])
-print("Status :", result["status"])
-print("Output :", output_text(result))"""),
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
+PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -264,18 +182,34 @@ To continue a conversation you **don't** resend history. Capture the first respo
 and pass it as `previous_response_id` on the next POST — the service rehydrates the prior
 state server-side. Same field, same semantics as the SDK; here it's just another JSON key."""),
     code("""\
-turn1 = requests.post(responses_url, headers=headers, json={
-    "input": [{"role": "user", "content": "Invent a one-line story about an astronaut named Mira."}],
-    "agent_reference": {"name": AGENT_NAME, "type": "agent_reference"},
-}, timeout=60).json()
-print("Turn 1:", output_text(turn1))
+// ── 1. Define a "send_email" tool that requires approval ───────────────
+FunctionToolDefinition sendEmailTool = new FunctionToolDefinition(
+    new FunctionDefinition("send_email", BinaryData.fromString(\"\"\"
+        {
+          "type": "object",
+          "properties": {
+            "to": {"type": "string", "description": "Recipient email address"},
+            "subject": {"type": "string", "description": "Email subject"},
+            "body": {"type": "string", "description": "Email body"}
+          },
+          "required": ["to", "subject", "body"]
+        }
+        \"\"\"))
+        .setDescription("Send an email to a recipient. Requires human approval.")
+);
 
-turn2 = requests.post(responses_url, headers=headers, json={
-    "input": [{"role": "user", "content": "Now tell me what happens next, in one line."}],
-    "previous_response_id": turn1["id"],          # ← the whole continuation primitive
-    "agent_reference": {"name": AGENT_NAME, "type": "agent_reference"},
-}, timeout=60).json()
-print("Turn 2:", output_text(turn2))"""),
+FunctionToolDefinition getInfoTool = new FunctionToolDefinition(
+    new FunctionDefinition("get_info", BinaryData.fromString(\"\"\"
+        {
+          "type": "object",
+          "properties": {
+            "topic": {"type": "string", "description": "Topic to get information about"}
+          },
+          "required": ["topic"]
+        }
+        \"\"\"))
+        .setDescription("Get information about a topic. Does NOT require approval.")
+);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -293,35 +227,17 @@ For token-by-token UIs, add **`"stream": true`**. The response content type flip
 `application/json` to `text/event-stream`: a sequence of `data: {json}` lines. You dispatch
 on each event's `type` and accumulate **`response.output_text.delta`** chunks as they land."""),
     code("""\
-import sys
+// ── 2. Create the agent ───────────────────────────────────────────────
+PersistentAgent agent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
+    new CreateAgentOptions(config.chatModel)
+        .setName("hitl-agent")
+        .setInstructions("You are a helpful assistant. Use tools when appropriate. " +
+            "For send_email, always call the tool (do not refuse).")
+        .setTools(List.of(sendEmailTool, getInfoTool))
+);
 
-stream_headers = {**headers, "Accept": "text/event-stream"}
-stream_body = {
-    "input": [{"role": "user", "content": "Tell me a three-sentence story about a lighthouse keeper."}],
-    "agent_reference": {"name": AGENT_NAME, "type": "agent_reference"},
-    "stream": True,
-}
-
-chunks, event_counts = [], {}
-with requests.post(responses_url, headers=stream_headers, json=stream_body,
-                   stream=True, timeout=120) as r:
-    r.raise_for_status()
-    print("content-type:", r.headers.get("content-type"), "\\n")
-    for line in r.iter_lines(decode_unicode=True):
-        if not line or not line.startswith("data: "):
-            continue
-        payload = line[len("data: "):]
-        if payload == "[DONE]":
-            break
-        event = json.loads(payload)
-        etype = event.get("type", "<none>")
-        event_counts[etype] = event_counts.get(etype, 0) + 1
-        if etype == "response.output_text.delta":
-            chunks.append(event.get("delta", ""))
-            sys.stdout.write(event["delta"]); sys.stdout.flush()
-
-print("\\n\\nChars   :", sum(len(c) for c in chunks))
-print("Events  :", event_counts)"""),
+System.out.println("PersistentAgent created: " + agent.getName());
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     The story prints **incrementally** as deltas arrive, then the tallies:
@@ -364,10 +280,20 @@ single-shot, multi-turn, and streaming.** Next: shrink a big model into a smalle
 that mimics it.
 """ + next_link("14-fine-tuning-distillation", "M14 · Fine-Tuning & Distillation")),
 ]
+    # Extra Java cells
+    code("""\
+// ── 3. Run with human-in-the-loop approval ────────────────────────────
+System.out.println("=== Human-in-the-loop demo ===");
+String userRequest = "Please get info about Azure AI Foundry, then send a summary " +
+    "to team@example.com with subject 'Foundry Summary'.";
+
+String reply = runWithApproval(projectClient, agent, userRequest);
+System.out.println("Final response: " + reply);
+
+projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agent.getId());"""),
+
 
 write_notebook(
     "docs/modules/13-human-in-the-loop-and-rest.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )

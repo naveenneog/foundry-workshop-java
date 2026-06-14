@@ -87,29 +87,29 @@ def write_notebook(
     path: str,
     cells: list,
     *,
-    kernel_name: str = "python3",
-    kernel_display: str = "Python 3",
-    language_version: str = "3.12",
+    kernel_name: str = "java",
+    kernel_display: str = "Java (IJava/1.3)",
+    language_version: str = "17",
 ) -> None:
     """Write ``cells`` to ``path`` as an ``.ipynb`` with workshop kernel metadata.
 
     Args:
         path: output ``.ipynb`` path. Parent directory must already exist.
         cells: list of cells from :func:`md` / :func:`code`.
-        kernel_name: Jupyter kernel name participants register/select. Match the
-            value used in ``python -m ipykernel install --name <kernel_name>``.
+        kernel_name: Jupyter kernel name participants register/select.  For Java
+            notebooks this is ``java`` (the name registered by IJava).
         kernel_display: kernel display name shown in the notebook UI.
-        language_version: Python version string recorded in notebook metadata.
+        language_version: Java version string recorded in notebook metadata.
     """
     nb = new_notebook(cells=cells)
     nb.metadata.update(
         {
             "kernelspec": {
                 "display_name": kernel_display,
-                "language": "python",
+                "language": "java",
                 "name": kernel_name,
             },
-            "language_info": {"name": "python", "version": language_version},
+            "language_info": {"name": "java", "version": language_version},
         }
     )
     with open(path, "w", encoding="utf-8") as fh:

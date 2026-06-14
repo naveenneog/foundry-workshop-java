@@ -4,7 +4,6 @@ import com.azure.ai.openai.OpenAIClient;
 import com.azure.ai.openai.OpenAIClientBuilder;
 import com.azure.ai.openai.models.ChatCompletions;
 import com.azure.ai.openai.models.ChatCompletionsOptions;
-import com.azure.ai.openai.models.ChatMessageContentItem;
 import com.azure.ai.openai.models.ChatRequestMessage;
 import com.azure.ai.openai.models.ChatRequestSystemMessage;
 import com.azure.ai.openai.models.ChatRequestUserMessage;
@@ -12,8 +11,6 @@ import com.azure.ai.openai.models.Embeddings;
 import com.azure.ai.openai.models.EmbeddingsOptions;
 import com.azure.core.credential.TokenCredential;
 import com.azure.core.util.IterableStream;
-import com.azure.ai.openai.models.ChatCompletionsStreamOptions;
-import com.azure.ai.openai.models.StreamingChatCompletionsUpdate;
 import com.azure.identity.DefaultAzureCredentialBuilder;
 
 import java.util.Arrays;
@@ -105,7 +102,7 @@ public class Module01FirstInference {
         System.out.println("Model      : " + embeddingModel);
         System.out.println("Dimensions : " + result.getData().get(0).getEmbedding().size());
         for (int i = 0; i < result.getData().size(); i++) {
-            List<Double> v = result.getData().get(i).getEmbedding();
+            List<Float> v = result.getData().get(i).getEmbedding();
             System.out.printf("[%d] [%.4f, %.4f, %.4f, ...]  (%d dims)%n",
                 i, v.get(0), v.get(1), v.get(2), v.size());
         }
@@ -121,15 +118,15 @@ public class Module01FirstInference {
             new ChatRequestUserMessage("In one sentence, what is Microsoft Foundry?")
         );
 
-        IterableStream<StreamingChatCompletionsUpdate> stream =
+        IterableStream<ChatCompletions> stream =
             client.getChatCompletionsStream(
                 chatModel,
                 new ChatCompletionsOptions(messages)
             );
 
-        stream.forEach(update -> {
-            if (update.getChoices() != null && !update.getChoices().isEmpty()) {
-                String delta = update.getChoices().get(0).getDelta().getContent();
+        stream.forEach(chunk -> {
+            if (chunk.getChoices() != null && !chunk.getChoices().isEmpty()) {
+                String delta = chunk.getChoices().get(0).getDelta().getContent();
                 if (delta != null) {
                     System.out.print(delta);
                     System.out.flush();

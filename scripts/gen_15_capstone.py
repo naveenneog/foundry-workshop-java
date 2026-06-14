@@ -6,9 +6,6 @@ enterprise topics the workshop deliberately deferred.
 """
 from nbbuild import md, code, write_notebook, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M15 · Capstone
@@ -38,20 +35,10 @@ enterprise topics this workshop deliberately kept out of your way.
 Same four lines from """ + sibling_link("01-first-inference", "M1") + """ — one client,
 reused for everything."""),
     code("""\
-import os
-from dotenv import load_dotenv
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-
-load_dotenv()
-PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-CHAT_MODEL       = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-
-credential     = DefaultAzureCredential()
-project_client = AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-openai_client  = project_client.get_openai_client()
-
-print("Ready to build the capstone agent on:", CHAT_MODEL)"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module15Capstone
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module15Capstone.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -65,28 +52,46 @@ We give the support agent one **custom function tool** — looking up an order's
 exactly as you did in """ + sibling_link("03-tools-and-function-calling", "M3") + """.
 In a real build this would hit your order system; here it's a stub."""),
     code("""\
-import json
-
-# The local implementation the agent's tool call maps to.
-def get_order_status(order_id: str) -> dict:
-    orders = {
-        "A-1001": {"status": "shipped",   "eta": "2026-06-15"},
-        "A-1002": {"status": "processing", "eta": "2026-06-20"},
-    }
-    return orders.get(order_id, {"status": "not_found"})
-
-# The tool schema advertised to the model (function calling).
-order_tool = {
-    "type": "function",
-    "name": "get_order_status",
-    "description": "Look up the status and ETA of a customer order by its ID.",
-    "parameters": {
-        "type": "object",
-        "properties": {"order_id": {"type": "string", "description": "e.g. A-1001"}},
-        "required": ["order_id"],
-    },
-}
-print("Tool defined:", order_tool["name"])"""),
+import com.azure.ai.openai.OpenAIClient;
+import com.azure.ai.openai.OpenAIClientBuilder;
+import com.azure.ai.openai.models.ChatCompletions;
+import com.azure.ai.openai.models.ChatCompletionsOptions;
+import com.azure.ai.openai.models.ChatRequestSystemMessage;
+import com.azure.ai.openai.models.ChatRequestUserMessage;
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.FunctionDefinition;
+import com.azure.ai.agents.persistent.models.FunctionToolDefinition;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RequiredFunctionToolCall;
+import com.azure.ai.agents.persistent.models.RequiredToolCall;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.SubmitToolOutputsAction;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.ToolOutput;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
+import com.azure.core.credential.TokenCredential;
+import com.azure.core.util.BinaryData;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.context.Scope;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
+import com.azure.monitor.opentelemetry.exporter.AzureMonitorExporterBuilder;
+import io.opentelemetry.sdk.trace.export.SpanExporter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -101,25 +106,9 @@ whose definition carries both **instructions** and the **tool**. In a full build
 also attach a Foundry IQ **knowledge base** (""" + sibling_link("04-grounding-rag-foundry-iq", "M4") + """)
 here so answers are grounded with citations."""),
     code("""\
-from azure.ai.projects.models import PromptAgentDefinition
-
-AGENT_NAME = "contoso-support-agent"
-
-agent = project_client.agents.create_version(
-    agent_name=AGENT_NAME,
-    definition=PromptAgentDefinition(
-        model=CHAT_MODEL,
-        instructions=(
-            "You are Contoso's support agent. Be concise and friendly. "
-            "Use the get_order_status tool whenever a customer asks about an order. "
-            "If grounding knowledge is attached, cite it. Never invent order data."
-        ),
-        tools=[order_tool],
-        # knowledge=[...]   # attach a Foundry IQ knowledge base in a full build (M4)
-    ),
-)
-print("Name    :", agent.name)
-print("Version :", agent.version)"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -142,36 +131,13 @@ function locally and feed the result back so it can finish its answer — the
 `function_call → function_call_output` loop from """ +
 sibling_link("13-human-in-the-loop-and-rest", "M13") + """."""),
     code("""\
-def run_support(user_msg: str) -> str:
-    resp = openai_client.responses.create(
-        input=[{"role": "user", "content": user_msg}],
-        extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
-    )
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-    # Did the model ask to call our tool?
-    tool_calls = [o for o in resp.output if getattr(o, "type", None) == "function_call"]
-    if not tool_calls:
-        return resp.output_text
-
-    # Execute each requested tool and return the outputs.
-    outputs = []
-    for call in tool_calls:
-        args = json.loads(call.arguments)
-        result = get_order_status(**args)
-        outputs.append({
-            "type": "function_call_output",
-            "call_id": call.call_id,
-            "output": json.dumps(result),
-        })
-
-    final = openai_client.responses.create(
-        input=outputs,
-        previous_response_id=resp.id,
-        extra_body={"agent_reference": {"name": agent.name, "type": "agent_reference"}},
-    )
-    return final.output_text
-
-print(run_support("Where is my order A-1001?"))"""),
+System.out.println("=== Capstone: Enterprise AI PersistentAgent ===");
+System.out.println("Project : " + config.projectEndpoint);
+System.out.println("Chat    : " + config.chatModel);
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -188,21 +154,18 @@ A capstone agent isn't done until it's **measured** (""" +
 sibling_link("09-evaluation", "M9") + """). Score a couple of responses for
 **relevance** against a tiny inline test set."""),
     code("""\
-from azure.ai.evaluation import RelevanceEvaluator, AzureOpenAIModelConfiguration
+// ── Initialise telemetry ───────────────────────────────────────────────
+initTracing(config.appInsightsConnectionString);
 
-judge = AzureOpenAIModelConfiguration(
-    azure_endpoint=PROJECT_ENDPOINT,
-    azure_deployment=CHAT_MODEL,
-)
-relevance = RelevanceEvaluator(model_config=judge)
-
-cases = [
-    {"query": "Where is my order A-1001?", "response": run_support("Where is my order A-1001?")},
-    {"query": "What's the ETA on A-1002?",  "response": run_support("What's the ETA on A-1002?")},
-]
-for c in cases:
-    score = relevance(query=c["query"], response=c["response"])
-    print(f"{c['query'][:28]:30} relevance = {score['relevance']}/5")"""),
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
+PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();
+OpenAIClient openAIClient = new OpenAIClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -218,15 +181,27 @@ Finally, turn on tracing (""" + sibling_link("10-observability-tracing", "M10") 
 so every capstone run emits spans to **Application Insights**. One call wires it up;
 after that your `run_support(...)` calls are traced automatically."""),
     code("""\
-from azure.monitor.opentelemetry import configure_azure_monitor
+// ── Create the capstone agent (tools + memory via persistent thread) ──
+FunctionToolDefinition weatherTool = Module03ToolsAndFunctionCalling.buildGetWeatherTool();
+FunctionToolDefinition exchangeTool = buildExchangeRateTool();
 
-conn = os.environ.get("APP_INSIGHTS_CONN_STRING")
-if conn:
-    configure_azure_monitor(connection_string=conn)
-    # project_client.telemetry / AIProjectInstrumentor wiring as in M10
-    print("Tracing on — capstone runs now export spans to App Insights.")
-else:
-    print("Set APP_INSIGHTS_CONN_STRING in .env to enable tracing (see M10).")"""),
+PersistentAgent agent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
+    new CreateAgentOptions(config.chatModel)
+        .setName("capstone-agent")
+        .setInstructions(
+            "You are an enterprise travel-planning assistant. " +
+            "Use the get_weather tool for weather questions and the " +
+            "get_exchange_rate tool for currency questions. " +
+            "Remember context across turns."
+        )
+        .setTools(List.of(weatherTool, exchangeTool))
+);
+
+// Persistent thread — reused across turns for memory (M6)
+PersistentAgentThread thread = projectClient.getThreadsClient().createThread();
+
+System.out.println("PersistentAgent and thread ready. Starting conversation...");
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -273,10 +248,56 @@ Foundry — end to end.** That's the whole workshop. Nicely done.
 
 ← Back to """ + page_link("index", "the workshop home") + """ · revisit any lab from there."""),
 ]
+    # Extra Java cells
+    code("""\
+// ── Multi-turn conversation ─────────────────────────────────────────────
+List<String> userTurns = List.of(
+    "I'm planning a trip. My name is Sam.",
+    "What's the weather like in Zurich and Oslo?",
+    "What is the USD to EUR exchange rate?",
+    "Given the weather and currency info, which city should I visit first?"
+);
+
+Module09Evaluation.LlmJudge judge =
+    new Module09Evaluation.LlmJudge(openAIClient, config.chatModel);
+
+for (String userMessage : userTurns) {
+    System.out.println("User: " + userMessage);
+
+    // Layer 1: input guardrails
+    Module11Guardrails.GuardrailResult guard = Module11Guardrails.checkInput(userMessage);
+    if (!guard.allowed()) {
+        System.out.println("BLOCKED: " + guard.reason());
+        System.out.println();
+        continue;
+    }
+
+    // Layer 2: invoke agent with tracing
+    String reply = invokeWithTracing(projectClient, agent, thread, userMessage);
+
+    // Layer 3: output guardrails
+    Module11Guardrails.GuardrailResult outGuard = Module11Guardrails.checkOutput(reply);
+    if (!outGuard.allowed()) {
+        System.out.println("OUTPUT BLOCKED: " + outGuard.reason());
+        System.out.println();
+        continue;
+    }
+
+    System.out.println("Agent: " + reply);
+
+    // Layer 4: LLM-as-judge quality check on substantive answers
+    if (reply.length() > 50) {
+        double relevance = judge.relevance(userMessage, reply);
+        System.out.printf("  [quality] relevance=%.1f/5%n", relevance);
+    }
+    System.out.println();
+}
+
+projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agent.getId());
+System.out.println("Capstone complete! See Application Insights for traces.");"""),
+
 
 write_notebook(
     "docs/modules/15-capstone.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )

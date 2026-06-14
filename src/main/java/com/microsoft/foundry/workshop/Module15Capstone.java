@@ -6,21 +6,23 @@ import com.azure.ai.openai.models.ChatCompletions;
 import com.azure.ai.openai.models.ChatCompletionsOptions;
 import com.azure.ai.openai.models.ChatRequestSystemMessage;
 import com.azure.ai.openai.models.ChatRequestUserMessage;
-import com.azure.ai.projects.AIProjectClient;
-import com.azure.ai.projects.AIProjectClientBuilder;
-import com.azure.ai.projects.models.Agent;
-import com.azure.ai.projects.models.AgentThread;
-import com.azure.ai.projects.models.CreateAgentOptions;
-import com.azure.ai.projects.models.CreateRunOptions;
-import com.azure.ai.projects.models.FunctionDefinition;
-import com.azure.ai.projects.models.FunctionToolDefinition;
-import com.azure.ai.projects.models.MessageRole;
-import com.azure.ai.projects.models.RequiredFunctionToolCall;
-import com.azure.ai.projects.models.RunStatus;
-import com.azure.ai.projects.models.SubmitToolOutputsAction;
-import com.azure.ai.projects.models.ThreadMessage;
-import com.azure.ai.projects.models.ThreadRun;
-import com.azure.ai.projects.models.ToolOutput;
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.FunctionDefinition;
+import com.azure.ai.agents.persistent.models.FunctionToolDefinition;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RequiredFunctionToolCall;
+import com.azure.ai.agents.persistent.models.RequiredToolCall;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.SubmitToolOutputsAction;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.ToolOutput;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
 import com.azure.core.credential.TokenCredential;
 import com.azure.core.util.BinaryData;
 import com.azure.identity.DefaultAzureCredentialBuilder;
@@ -34,7 +36,8 @@ import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
 import com.azure.monitor.opentelemetry.exporter.AzureMonitorExporterBuilder;
-import com.azure.monitor.opentelemetry.exporter.AzureMonitorTraceExporter;
+import io.opentelemetry.sdk.trace.export.SpanExporter;
+
 
 import java.util.ArrayList;
 import java.util.List;
@@ -65,7 +68,7 @@ public class Module15Capstone {
     public static void main(String[] args) throws Exception {
         WorkshopConfig config = WorkshopConfig.load();
 
-        System.out.println("=== Capstone: Enterprise AI Agent ===");
+        System.out.println("=== Capstone: Enterprise AI PersistentAgent ===");
         System.out.println("Project : " + config.projectEndpoint);
         System.out.println("Chat    : " + config.chatModel);
         System.out.println();
@@ -74,7 +77,7 @@ public class Module15Capstone {
         initTracing(config.appInsightsConnectionString);
 
         TokenCredential credential = new DefaultAzureCredentialBuilder().build();
-        AIProjectClient projectClient = new AIProjectClientBuilder()
+        PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
             .endpoint(config.projectEndpoint)
             .credential(credential)
             .buildClient();
@@ -87,7 +90,7 @@ public class Module15Capstone {
         FunctionToolDefinition weatherTool = Module03ToolsAndFunctionCalling.buildGetWeatherTool();
         FunctionToolDefinition exchangeTool = buildExchangeRateTool();
 
-        Agent agent = projectClient.getAgentsClient().createAgent(
+        PersistentAgent agent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
             new CreateAgentOptions(config.chatModel)
                 .setName("capstone-agent")
                 .setInstructions(
@@ -100,9 +103,9 @@ public class Module15Capstone {
         );
 
         // Persistent thread — reused across turns for memory (M6)
-        AgentThread thread = projectClient.getAgentsClient().createThread();
+        PersistentAgentThread thread = projectClient.getThreadsClient().createThread();
 
-        System.out.println("Agent and thread ready. Starting conversation...");
+        System.out.println("PersistentAgent and thread ready. Starting conversation...");
         System.out.println();
 
         // ── Multi-turn conversation ─────────────────────────────────────────────
@@ -148,7 +151,7 @@ public class Module15Capstone {
             System.out.println();
         }
 
-        projectClient.getAgentsClient().deleteAgent(agent.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agent.getId());
         System.out.println("Capstone complete! See Application Insights for traces.");
     }
 
@@ -192,7 +195,7 @@ public class Module15Capstone {
     }
 
     private static String invokeWithTracing(
-            AIProjectClient client, Agent agent, AgentThread thread, String userMessage)
+            PersistentAgentsClient client, PersistentAgent agent, PersistentAgentThread thread, String userMessage)
             throws Exception {
 
         Span span = tracer.spanBuilder("capstone.turn")
@@ -200,24 +203,24 @@ public class Module15Capstone {
             .startSpan();
 
         try (Scope ignored = span.makeCurrent()) {
-            client.getAgentsClient().createMessage(thread.getId(), MessageRole.USER, userMessage);
-            ThreadRun run = client.getAgentsClient().createRun(
-                thread.getId(), new CreateRunOptions(agent.getId())
-            );
+            client.getMessagesClient().createMessage(thread.getId(), MessageRole.USER, userMessage);
+            ThreadRun run = client.getRunsClient().createRun(
+                new CreateRunOptions(thread.getId(), agent.getId()));
 
             while (true) {
                 Thread.sleep(1_000);
-                run = client.getAgentsClient().getRun(thread.getId(), run.getId());
+                run = client.getRunsClient().getRun(thread.getId(), run.getId());
 
                 if (run.getStatus() == RunStatus.REQUIRES_ACTION) {
                     SubmitToolOutputsAction action = (SubmitToolOutputsAction) run.getRequiredAction();
                     List<ToolOutput> outputs = new ArrayList<>();
-                    for (RequiredFunctionToolCall call : action.getSubmitToolOutputs().getToolCalls()) {
+                    for (RequiredToolCall _toolCall : action.getSubmitToolOutputs().getToolCalls()) {
+                        RequiredFunctionToolCall call = (RequiredFunctionToolCall) _toolCall;
                         String result = dispatchTool(call.getFunction().getName(), call.getFunction().getArguments());
                         System.out.printf("  [tool] %s -> %s%n", call.getFunction().getName(), result);
-                        outputs.add(new ToolOutput(call.getId(), result));
+                        outputs.add(new ToolOutput().setToolCallId(call.getId()).setOutput(result));
                     }
-                    run = client.getAgentsClient().submitToolOutputsToRun(thread.getId(), run.getId(), outputs);
+                    run = client.getRunsClient().submitToolOutputsToRun(thread.getId(), run.getId(), outputs);
                 } else if (run.getStatus() == RunStatus.COMPLETED) {
                     span.setStatus(StatusCode.OK);
                     break;
@@ -230,13 +233,12 @@ public class Module15Capstone {
             span.end();
         }
 
-        List<ThreadMessage> messages = client.getAgentsClient()
-            .listMessages(thread.getId()).stream().toList();
+        List<ThreadMessage> messages = client.getMessagesClient().listMessages(thread.getId()).stream().toList();
         for (ThreadMessage msg : messages) {
-            if (msg.getRole() == MessageRole.ASSISTANT) {
+            if (msg.getRole() == MessageRole.AGENT) {
                 return msg.getContent().stream()
                     .filter(c -> "text".equals(c.getType()))
-                    .map(c -> c.asText().getText().getValue())
+                    .map(c -> { MessageTextContent tc = (MessageTextContent) c; return tc.getText().getValue(); })
                     .findFirst().orElse("");
             }
         }
@@ -246,7 +248,7 @@ public class Module15Capstone {
     private static void initTracing(String connectionString) {
         SdkTracerProvider tracerProvider;
         if (!connectionString.isBlank()) {
-            AzureMonitorTraceExporter exporter = new AzureMonitorExporterBuilder()
+            SpanExporter exporter = new AzureMonitorExporterBuilder()
                 .connectionString(connectionString)
                 .buildTraceExporter();
             tracerProvider = SdkTracerProvider.builder()

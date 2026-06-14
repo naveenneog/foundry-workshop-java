@@ -34,8 +34,8 @@ public class Module11Guardrails {
 
     // Simple heuristic patterns — augment with Azure AI Content Safety in production
     private static final Pattern JAILBREAK_PATTERN = Pattern.compile(
-        "(?i)(ignore (previous|all) instructions|do anything now|dan mode|" +
-        "disregard (your|all)|pretend you are|you are now|forget (your|all)|" +
+        "(?i)(ignore.*instructions|do anything now|dan mode|" +
+        "disregard (your|all)|pretend you|you are now|forget (your|all)|" +
         "override (safety|restrictions)|act as if|bypass|jailbreak)",
         Pattern.CASE_INSENSITIVE
     );

@@ -8,9 +8,6 @@ knowledge base keep the focus on the RAG arc and the SDK calls.
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M4 · Grounding / RAG (Foundry IQ)
@@ -42,29 +39,10 @@ The arc of this lab is three steps: **embed + index → build a KB → ground an
 We read the same project variables as every lab, plus the **Search endpoint** and a
 **project connection name** that lets your project reach the KB's tool endpoint."""),
     code("""\
-import os
-from dotenv import load_dotenv
-
-load_dotenv()  # reads .env from the repo root
-
-PROJECT_ENDPOINT  = os.environ["PROJECT_ENDPOINT"]
-CHAT_MODEL        = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-EMBEDDING_MODEL   = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
-SEARCH_ENDPOINT   = os.environ["SEARCH_ENDPOINT"]
-
-# Names we'll create / reference in this lab.
-INDEX_NAME        = "foundry-facts"
-KS_NAME           = "foundry-facts-ks"      # knowledge source (registers the index)
-KB_NAME           = "foundry-facts-kb"      # knowledge base (what the agent queries)
-SEARCH_CONNECTION = os.environ.get("SEARCH_CONNECTION", "foundry-iq-search")
-
-# The KB's model-grounded query endpoint needs the account (not project) URL.
-ACCOUNT_ENDPOINT  = PROJECT_ENDPOINT.split("/api/projects/")[0]
-
-print("Project :", PROJECT_ENDPOINT)
-print("Search  :", SEARCH_ENDPOINT)
-print("Index   :", INDEX_NAME)
-print("Embed   :", EMBEDDING_MODEL)"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module04GroundingRagFoundryIq
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module04GroundingRagFoundryIq.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -82,23 +60,41 @@ print("Embed   :", EMBEDDING_MODEL)"""),
 One `DefaultAzureCredential` authenticates *everything* — the Foundry project, the
 OpenAI-compatible client (for embeddings), and the two Azure AI Search clients."""),
     code("""\
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-from azure.search.documents import SearchClient
-from azure.search.documents.indexes import SearchIndexClient
-
-credential     = DefaultAzureCredential()
-project_client = AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-openai_client  = project_client.get_openai_client()
-
-index_client   = SearchIndexClient(endpoint=SEARCH_ENDPOINT, credential=credential)
-search_client  = SearchClient(endpoint=SEARCH_ENDPOINT, index_name=INDEX_NAME,
-                              credential=credential)
-
-print("project_client :", "ready")
-print("openai_client  :", "ready")
-print("index_client   :", "ready")
-print("search_client  :", "ready")"""),
+import com.azure.ai.openai.OpenAIClient;
+import com.azure.ai.openai.OpenAIClientBuilder;
+import com.azure.ai.openai.models.Embeddings;
+import com.azure.ai.openai.models.EmbeddingsOptions;
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.AISearchIndexResource;
+import com.azure.ai.agents.persistent.models.AzureAISearchQueryType;
+import com.azure.ai.agents.persistent.models.AzureAISearchToolDefinition;
+import com.azure.ai.agents.persistent.models.AzureAISearchToolResource;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.ToolResources;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
+import com.azure.core.credential.TokenCredential;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import com.azure.search.documents.SearchClient;
+import com.azure.search.documents.SearchClientBuilder;
+import com.azure.search.documents.indexes.SearchIndexClient;
+import com.azure.search.documents.indexes.SearchIndexClientBuilder;
+import com.azure.search.documents.indexes.models.HnswAlgorithmConfiguration;
+import com.azure.search.documents.indexes.models.SearchField;
+import com.azure.search.documents.indexes.models.SearchFieldDataType;
+import com.azure.search.documents.indexes.models.SearchIndex;
+import com.azure.search.documents.indexes.models.VectorSearch;
+import com.azure.search.documents.indexes.models.VectorSearchProfile;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -119,58 +115,9 @@ fast approximate-nearest-neighbour search; a **semantic configuration** adds Mic
 re-ranker on top. An **integrated vectorizer** lets the index embed *queries* at search
 time using your project's embedding deployment."""),
     code("""\
-from azure.search.documents.indexes.models import (
-    SearchField, SearchFieldDataType, SearchableField, SimpleField,
-    SearchIndex, VectorSearch, VectorSearchProfile,
-    HnswAlgorithmConfiguration, HnswParameters,
-    AzureOpenAIVectorizer, AzureOpenAIVectorizerParameters,
-    SemanticConfiguration, SemanticSearch, SemanticField, SemanticPrioritizedFields,
-)
-
-VECTOR_DIMS = 3072  # text-embedding-3-large
-
-fields = [
-    SimpleField(name="id", type=SearchFieldDataType.String, key=True),
-    SearchableField(name="title", type=SearchFieldDataType.String),
-    SearchableField(name="content", type=SearchFieldDataType.String,
-                    analyzer_name="en.microsoft"),
-    SearchField(
-        name="contentVector",
-        type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
-        searchable=True, stored=False,
-        vector_search_dimensions=VECTOR_DIMS,
-        vector_search_profile_name="facts-hnsw-profile",
-    ),
-]
-
-vector_search = VectorSearch(
-    algorithms=[HnswAlgorithmConfiguration(name="facts-hnsw",
-                parameters=HnswParameters(metric="cosine"))],
-    profiles=[VectorSearchProfile(name="facts-hnsw-profile",
-              algorithm_configuration_name="facts-hnsw",
-              vectorizer_name="facts-vectorizer")],
-    vectorizers=[AzureOpenAIVectorizer(
-        vectorizer_name="facts-vectorizer",
-        parameters=AzureOpenAIVectorizerParameters(
-            resource_url=ACCOUNT_ENDPOINT,        # single project — no gateway
-            deployment_name=EMBEDDING_MODEL,
-            model_name=EMBEDDING_MODEL,           # managed identity (no api_key)
-        ),
-    )],
-)
-
-semantic_search = SemanticSearch(configurations=[SemanticConfiguration(
-    name="facts-semantic",
-    prioritized_fields=SemanticPrioritizedFields(
-        title_field=SemanticField(field_name="title"),
-        content_fields=[SemanticField(field_name="content")],
-    ),
-)])
-
-index = SearchIndex(name=INDEX_NAME, fields=fields,
-                    vector_search=vector_search, semantic_search=semantic_search)
-result = index_client.create_or_update_index(index)
-print(f"Index '{result.name}' ready ({len(result.fields)} fields)")"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -190,39 +137,36 @@ Real RAG runs over thousands of docs; to learn the mechanics we use **five short
 about Microsoft Foundry**. We embed each one with the same `embeddings.create` call from
 """ + sibling_link("01-first-inference", "M1") + """, attach the vector, and upload."""),
     code("""\
-corpus = [
-    {"id": "1", "title": "Foundry projects",
-     "content": "A Microsoft Foundry project is your working scope. Agents, knowledge "
-                "bases, evaluations, and traces all live inside one project, addressed "
-                "by a project endpoint."},
-    {"id": "2", "title": "DefaultAzureCredential",
-     "content": "Every Foundry lab authenticates with DefaultAzureCredential, which uses "
-                "your az login identity locally and a managed identity in production — "
-                "no model API keys are stored in code."},
-    {"id": "3", "title": "Knowledge bases",
-     "content": "Foundry IQ grounds an agent by attaching a knowledge base built over an "
-                "Azure AI Search index. The agent retrieves chunks and cites them, so "
-                "answers are backed by your own documents."},
-    {"id": "4", "title": "The Responses API",
-     "content": "The Responses API is the modern stateful surface that powers agents and "
-                "tools. You invoke an agent by passing an agent_reference to "
-                "responses.create."},
-    {"id": "5", "title": "Embeddings",
-     "content": "text-embedding-3-large turns text into 3072-dimensional vectors. "
-                "Cosine similarity over those vectors is the basis for semantic "
-                "retrieval in a search index."},
-]
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-vectors = openai_client.embeddings.create(
-    model=EMBEDDING_MODEL,
-    input=[doc["content"] for doc in corpus],
-)
-for doc, item in zip(corpus, vectors.data):
-    doc["contentVector"] = item.embedding
+if (config.searchEndpoint.isBlank()) {
+    System.err.println("SEARCH_ENDPOINT is not set — please add it to .env");
+    System.exit(1);
+}
 
-search_client.upload_documents(corpus)
-print(f"Uploaded {len(corpus)} documents to '{INDEX_NAME}'.")
-print(f"Vector dims: {len(corpus[0]['contentVector'])}")"""),
+System.out.println("Project : " + config.projectEndpoint);
+System.out.println("Search  : " + config.searchEndpoint);
+System.out.println("Index   : " + INDEX_NAME);
+System.out.println("Embed   : " + config.embeddingModel);
+System.out.println();
+
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
+
+OpenAIClient openAIClient = new OpenAIClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();
+
+PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();
+
+SearchIndexClient indexClient = new SearchIndexClientBuilder()
+    .endpoint(config.searchEndpoint)
+    .credential(credential)
+    .buildClient();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -241,37 +185,9 @@ effort** — pure semantic retrieval with no extra LLM planning pass — which i
 simplest, fastest, lowest-cost option and needs no model config of its own. The agent's
 *own* model does the reasoning and citing."""),
     code("""\
-from azure.search.documents.indexes.models import (
-    SearchIndexKnowledgeSource, SearchIndexKnowledgeSourceParameters,
-    SearchIndexFieldReference, KnowledgeBase, KnowledgeSourceReference,
-    KnowledgeRetrievalOutputMode, KnowledgeRetrievalMinimalReasoningEffort,
-)
-
-# Knowledge source — register the index + which fields become citation metadata.
-ks = SearchIndexKnowledgeSource(
-    name=KS_NAME,
-    description="Five short facts about Microsoft Foundry.",
-    search_index_parameters=SearchIndexKnowledgeSourceParameters(
-        search_index_name=INDEX_NAME,
-        semantic_configuration_name="facts-semantic",
-        source_data_fields=[
-            SearchIndexFieldReference(name="id"),
-            SearchIndexFieldReference(name="title"),
-        ],
-    ),
-)
-index_client.create_or_update_knowledge_source(ks)
-
-# Knowledge base — minimal effort: no LLM, returns raw cited chunks (EXTRACTIVE_DATA).
-kb = KnowledgeBase(
-    name=KB_NAME,
-    description="Foundry facts KB — minimal effort, direct semantic retrieval.",
-    output_mode=KnowledgeRetrievalOutputMode.EXTRACTIVE_DATA,
-    knowledge_sources=[KnowledgeSourceReference(name=KS_NAME)],
-    retrieval_reasoning_effort=KnowledgeRetrievalMinimalReasoningEffort(),
-)
-index_client.create_or_update_knowledge_base(kb)
-print(f"Knowledge source '{KS_NAME}' and knowledge base '{KB_NAME}' ready.")"""),
+// ── 1. Create the search index ─────────────────────────────────────────
+System.out.println("=== Creating search index ===");
+createSearchIndex(indexClient);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -293,29 +209,9 @@ the cited chunks the agent will reason over. A `minimal`-effort KB takes an **in
 (a pre-parsed search directive) rather than a chat message, because it has no LLM to
 interpret a conversation."""),
     code("""\
-from azure.search.documents.knowledgebases import KnowledgeBaseRetrievalClient
-from azure.search.documents.knowledgebases.models import (
-    KnowledgeBaseRetrievalRequest, KnowledgeRetrievalSemanticIntent,
-    SearchIndexKnowledgeSourceParams,
-)
-
-kb_client = KnowledgeBaseRetrievalClient(
-    endpoint=SEARCH_ENDPOINT, knowledge_base_name=KB_NAME, credential=credential)
-
-request = KnowledgeBaseRetrievalRequest(
-    intents=[KnowledgeRetrievalSemanticIntent(search="How does Foundry ground an agent?")],
-    knowledge_source_params=[SearchIndexKnowledgeSourceParams(
-        knowledge_source_name=KS_NAME,
-        include_references=True,
-        include_reference_source_data=True,
-    )],
-)
-
-result = kb_client.retrieve(request)
-print("Retrieved text:\\n", result.response[0].content[0].text[:200], "...\\n")
-print("Citations:")
-for ref in result.references:
-    print(f"  - [{ref.id}] {(ref.source_data or {}).get('title', ref.id)}")"""),
+// ── 2. Generate embeddings and upload documents ────────────────────────
+System.out.println("=== Uploading embedded documents ===");
+uploadDocuments(openAIClient, indexClient, config.embeddingModel);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -339,44 +235,9 @@ an `MCPTool`, pointed at that endpoint through the project's **RemoteTool connec
 to cite — so the final answer is grounded *and* attributable. We then ask it via the
 same `responses.create` surface from """ + sibling_link("01-first-inference", "M1") + """."""),
     code("""\
-from azure.ai.projects.models import PromptAgentDefinition, MCPTool
-
-MCP_ENDPOINT = (f"{SEARCH_ENDPOINT}/knowledgebases/{KB_NAME}"
-                f"/mcp?api-version=2025-11-01-preview")
-
-kb_tool = MCPTool(
-    server_label="knowledge_base",
-    server_url=MCP_ENDPOINT,
-    require_approval="never",
-    allowed_tools=["knowledge_base_retrieve"],
-    project_connection_id=SEARCH_CONNECTION,
-)
-
-agent = project_client.agents.create_version(
-    agent_name="foundry-facts-agent",
-    definition=PromptAgentDefinition(
-        model=CHAT_MODEL,
-        instructions=(
-            "You answer questions about Microsoft Foundry. Always call the "
-            "knowledge_base tool first and answer only from what it returns. "
-            "Cite the source title in parentheses after each claim. If the answer "
-            "is not in the knowledge base, reply exactly: 'I don't know.'"
-        ),
-        tools=[kb_tool],
-    ),
-    description="Grounded Foundry facts agent (Foundry IQ knowledge base).",
-)
-print(f"Agent 'foundry-facts-agent' ready (version {agent.version}).")
-
-response = openai_client.responses.create(
-    input="What grounds an agent's answers, and how is auth handled?",
-    extra_body={"agent_reference": {"name": agent.name, "version": agent.version,
-                                    "type": "agent_reference"}},
-)
-tools_used = [i.server_label for i in response.output
-              if getattr(i, "type", None) == "mcp_call"]
-print("Tools called:", tools_used)
-print(response.output_text)"""),
+// ── 3. Wire an agent to the search index and ask a grounded question ──
+System.out.println("=== Grounded agent query ===");
+runGroundedAgent(projectClient, config.chatModel, config.searchEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -413,6 +274,4 @@ an agent that cites your data.** Next: reach *external* systems through MCP tool
 write_notebook(
     "docs/modules/04-grounding-rag-foundry-iq.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )

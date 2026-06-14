@@ -5,9 +5,8 @@ project with a couple of model deployments, and run a smoke test that proves you
 environment can reach Foundry.
 
 !!! info "Two kinds of dependency"
-    - To **read or build this site**, you only need the docs toolchain (`".[docs]"`).
-    - To **run the labs** against Azure, you also need the runtime SDKs (`pip install -e .`),
-      an `az login`, and a Foundry project. Both are covered below.
+    - To **read or build this site**, you only need the docs toolchain (`pip install mkdocs-material mkdocs-jupyter`).
+    - To **run the labs** against Azure, you also need JDK 17, Maven, and a Foundry project. Both are covered below.
 
 ---
 
@@ -17,7 +16,6 @@ You need an Azure subscription and these tools:
 
 - **Azure CLI** v2.60+ — [install](https://learn.microsoft.com/cli/azure/install-azure-cli)
 - **`cognitiveservices` CLI extension** — `az extension add -n cognitiveservices`
-- **`uv`** (recommended) — [install](https://docs.astral.sh/uv/getting-started/installation/) — or plain `python -m venv`
 - Signed in: **`az login`**
 
 ### Create a Foundry project + deploy models
@@ -37,59 +35,87 @@ In the **Microsoft Foundry (new)** portal:
 
 !!! tip "Don't have a project yet? You can still follow along"
     Every lab shows its **Expected output** in prose, so you can read the whole
-    workshop without Azure. Provision the project when you're ready to run cells.
+    workshop without Azure. Provision the project when you're ready to run code.
 
 ---
 
-## 2. Get the code & install
+## 2. Java prerequisites
 
-```bash
-git clone https://github.com/monuminu/foundry-workshop.git
-cd foundry-workshop
-```
+Install **JDK 17+** and **Maven 3.8+**:
 
-=== "uv (recommended)"
+=== "Linux / macOS (SDKMAN)"
 
     ```bash
-    uv venv --python 3.12 .venv
-    source .venv/bin/activate          # Windows: .venv\Scripts\activate
-    uv pip install -e ".[docs]"        # site + notebook toolchain
-    uv pip install -e .                # runtime SDKs to RUN the labs
+    curl -s "https://get.sdkman.io" | bash
+    sdk install java 17-tem
+    sdk install maven
     ```
 
-=== "pip"
+=== "Homebrew (macOS)"
 
     ```bash
-    python -m venv .venv
-    source .venv/bin/activate          # Windows: .venv\Scripts\activate
-    pip install -e ".[docs]"           # site + notebook toolchain
-    pip install -e .                   # runtime SDKs to RUN the labs
+    brew install openjdk@17 maven
     ```
 
-!!! warning "Pre-release SDKs"
-    Foundry's SDKs move fast. This workshop pins
-    `azure-ai-projects>=2.1.0`, `azure-identity>=1.26.0b2`, and
-    `agent-framework-*==1.0.0rc6` (see `pyproject.toml`). If an import breaks after an
-    upstream release, pin back to these versions.
+=== "Windows (winget)"
 
----
+    ```powershell
+    winget install Microsoft.OpenJDK.17
+    winget install Apache.Maven
+    ```
 
-## 3. Register the Jupyter kernel
+Verify:
 
 ```bash
-python -m ipykernel install --user --name foundry-workshop \
-  --display-name "Microsoft Foundry: End-to-End Workshop"
+java -version   # should print 17.x.x
+mvn -version    # should print Apache Maven 3.8+
 ```
-
-When you open a lab notebook, select the **Microsoft Foundry: End-to-End Workshop**
-kernel.
 
 ---
 
-## 4. Configure your environment
+## 3. Get the code & build
 
-Copy the template and fill in your values. **Every lab loads these exact variable
-names** via `python-dotenv`, so set them once here:
+```bash
+git clone https://github.com/naveenneog/foundry-workshop-java.git
+cd foundry-workshop-java
+
+# Compile
+mvn compile
+
+# Run offline unit tests (no Azure required)
+mvn test
+```
+
+A `BUILD SUCCESS` from `mvn test` with 40 tests passing means your Java toolchain is working.
+
+---
+
+## 4. Install IJava Jupyter kernel (optional — for notebook labs)
+
+If you want to run the labs as Jupyter notebooks, install
+[IJava](https://github.com/SpencerPark/IJava):
+
+```bash
+# 1. Download the latest IJava release (adjust version as needed)
+curl -LO https://github.com/SpencerPark/IJava/releases/download/v1.3.0/ijava-1.3.0.zip
+unzip ijava-1.3.0.zip -d ijava
+
+# 2. Install (requires Python + Jupyter)
+pip install jupyter
+python ijava/install.py --sys-prefix
+
+# 3. Verify the kernel is registered
+jupyter kernelspec list   # should show 'java'
+```
+
+When you open a lab notebook, select the **Java (IJava/1.3)** kernel.
+
+---
+
+## 5. Configure your environment
+
+Copy the template and fill in your values. **Every lab reads these exact variable
+names** via `WorkshopConfig.load()`:
 
 ```bash
 cp .env.example .env     # then edit .env
@@ -110,7 +136,7 @@ APP_INSIGHTS_CONN_STRING=<application-insights-conn-str>  # M10
 ```
 
 Authentication is **`DefaultAzureCredential`** throughout — your `az login` identity.
-**No model keys live in notebooks.**
+**No model keys live in source code.**
 
 !!! danger "Never commit `.env`"
     `.env` is git-ignored. Keep your subscription id, endpoints, and any keys out of
@@ -118,41 +144,35 @@ Authentication is **`DefaultAzureCredential`** throughout — your `az login` id
 
 ---
 
-## 5. Smoke test
+## 6. Smoke test
 
-Confirm your environment can construct the client and reach your project. Save this as
-`smoke_test.py` and run `python smoke_test.py`:
+Confirm your environment can compile and reach your project:
 
-```python
-import os
-from dotenv import load_dotenv
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
+```bash
+# Compile (resolves all Maven dependencies)
+mvn compile
 
-load_dotenv()
-
-project_client = AIProjectClient(
-    endpoint=os.environ["PROJECT_ENDPOINT"],
-    credential=DefaultAzureCredential(),
-)
-openai_client = project_client.get_openai_client()
-
-resp = openai_client.responses.create(
-    model=os.environ.get("CHAT_MODEL", "gpt-4.1-mini"),
-    input="Reply with exactly: Foundry is ready.",
-)
-print(resp.output_text)
+# Run M1 — First Inference (requires .env with PROJECT_ENDPOINT)
+mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module01FirstInference
 ```
 
-**Expected output:**
+**Expected output** (abbreviated):
 
 ```
-Foundry is ready.
+=== Chat completion ===
+Azure AI Foundry is Microsoft's unified platform for building enterprise AI...
+
+=== Embedding ===
+Embedding vector length: 3072
+
+=== Streaming ===
+Streaming: Azure  AI  Foundry  provides ...
 ```
 
-If you see that line, you're set. (A `401`/`403` means your identity lacks the **Azure
-AI Developer** role; a `DefaultAzureCredential` error usually means you need
-`az login`.)
+If you see output like that, you're ready to run all 15 labs.
+
+A `401`/`403` means your identity lacks the **Azure AI Developer** role; a
+`DefaultAzureCredentialException` usually means you need `az login`.
 
 ---
 

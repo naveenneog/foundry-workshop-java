@@ -8,9 +8,6 @@ plain deployment name).
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M3 · Tools & Function Calling
@@ -44,22 +41,10 @@ The familiar bootstrap from """ + sibling_link("01-first-inference", "M1") + """
 also keep a handle on `openai_client.files` (to hand data to Code Interpreter) and
 `project_client.agents` (to define tool-equipped agents)."""),
     code("""\
-import os, json
-from dotenv import load_dotenv
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-
-load_dotenv()  # reads .env from the repo root
-
-PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-CHAT_MODEL       = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-
-credential     = DefaultAzureCredential()
-project_client = AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-openai_client  = project_client.get_openai_client()
-
-print("Chat model :", CHAT_MODEL)
-print("clients    : ready")"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module03ToolsAndFunctionCalling
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module03ToolsAndFunctionCalling.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -74,19 +59,33 @@ Code Interpreter runs Python in a sandboxed container. To analyse a file, upload
 first with `purpose="assistants"`; the returned `file.id` is what you attach to the
 agent. Here we synthesize a tiny CSV and upload it."""),
     code("""\
-import io
-
-csv_bytes = io.BytesIO(
-    b"sector,quarter,operating_profit\\n"
-    b"TRANSPORTATION,Q1,120\\n"
-    b"TRANSPORTATION,Q2,135\\n"
-    b"TRANSPORTATION,Q3,128\\n"
-    b"TRANSPORTATION,Q4,150\\n"
-)
-csv_bytes.name = "quarterly_results.csv"   # the API uses this as the filename
-
-uploaded_file = openai_client.files.create(purpose="assistants", file=csv_bytes)
-print("Uploaded file id:", uploaded_file.id)"""),
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.FunctionToolDefinition;
+import com.azure.ai.agents.persistent.models.FunctionDefinition;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RequiredAction;
+import com.azure.ai.agents.persistent.models.RequiredFunctionToolCall;
+import com.azure.ai.agents.persistent.models.RequiredToolCall;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.SubmitToolOutputsAction;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.ToolDefinition;
+import com.azure.ai.agents.persistent.models.ToolOutput;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
+import com.azure.core.credential.TokenCredential;
+import com.azure.core.util.BinaryData;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -102,28 +101,9 @@ Attach the hosted tool through the `tools=[...]` field on the agent definition.
 `AutoCodeInterpreterToolParam` provisions a managed container and pre-loads the file
 ids you pass — so the agent can read the CSV the moment it runs."""),
     code("""\
-from azure.ai.projects.models import (
-    PromptAgentDefinition,
-    CodeInterpreterTool,
-    AutoCodeInterpreterToolParam,
-)
-
-analyst = project_client.agents.create_version(
-    agent_name="data-analyst-agent",
-    definition=PromptAgentDefinition(
-        model=CHAT_MODEL,
-        instructions="You are a helpful data analyst. Use Python to answer questions about uploaded files.",
-        tools=[
-            CodeInterpreterTool(
-                container=AutoCodeInterpreterToolParam(file_ids=[uploaded_file.id])
-            )
-        ],
-    ),
-    description="Analyses uploaded CSVs with sandboxed Python.",
-)
-
-print("Agent   :", analyst.name)
-print("Version :", analyst.version)"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -140,15 +120,19 @@ Ask a question that *requires* computation. The agent writes Python against the 
 runs it in the container, and returns the answer — you never see the code unless you
 ask for it. Invocation is the same `agent_reference` call from M2."""),
     code("""\
-response = openai_client.responses.create(
-    input=(
-        "From the uploaded CSV, which quarter had the highest operating profit "
-        "for the TRANSPORTATION sector, and what was the full-year total?"
-    ),
-    extra_body={"agent_reference": {"name": analyst.name, "type": "agent_reference"}},
-)
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-print(response.output_text)"""),
+System.out.println("Chat model : " + config.chatModel);
+
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
+PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();
+
+System.out.println("clients    : ready");
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -168,30 +152,10 @@ For *your* logic, declare a `FunctionTool`: a name, a description, and a JSON-Sc
 its parameters. This is only a **declaration** — the model uses it to decide *when* and
 *with what arguments* to call. The actual implementation stays in your code."""),
     code("""\
-from azure.ai.projects.models import FunctionTool
-
-get_weather_tool = FunctionTool(
-    name="get_weather",
-    description="Get the current weather for a city. Call this whenever a user asks about weather.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "city": {"type": "string", "description": "City name, e.g. 'Zurich'"},
-            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"], "description": "Temperature unit"},
-        },
-        "required": ["city"],
-    },
-)
-
-# The real implementation — a mock here; in production this calls a weather API.
-def get_weather(city: str, unit: str = "celsius") -> str:
-    fake = {"Zurich": 18, "Cairo": 34, "Oslo": 7}
-    temp = fake.get(city, 21)
-    if unit == "fahrenheit":
-        temp = round(temp * 9 / 5 + 32)
-    return f"{city}: {temp}°{'F' if unit == 'fahrenheit' else 'C'}, partly cloudy."
-
-print("Declared tool:", get_weather_tool.name)"""),
+// ── Define the get_weather function tool ──────────────────────────────
+FunctionToolDefinition getWeatherTool = buildGetWeatherTool();
+System.out.println("Declared tool: " + getWeatherTool.getFunction().getName());
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -208,46 +172,17 @@ text, you execute it, then send the result back as a **`function_call_output`** 
 `call_id`. Linking calls with `previous_response_id` lets the agent continue where it
 left off. Loop until no more tool calls remain."""),
     code("""\
-weather_agent = project_client.agents.create_version(
-    agent_name="weather-agent",
-    definition=PromptAgentDefinition(
-        model=CHAT_MODEL,
-        instructions="You are a travel assistant. Use the get_weather tool to answer weather questions; don't guess.",
-        tools=[get_weather_tool],
-    ),
-)
-agent_ref = {"agent_reference": {"name": weather_agent.name, "type": "agent_reference"}}
+// ── Create the weather agent ───────────────────────────────────────────
+PersistentAgent weatherAgent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
+    new CreateAgentOptions(config.chatModel)
+        .setName("weather-agent")
+        .setInstructions("You are a travel assistant. Use the get_weather tool to " +
+            "answer weather questions; don't guess.")
+        .setTools(List.of(getWeatherTool))
+);
 
-response = openai_client.responses.create(
-    input=[{"role": "user", "content": "Should I pack a coat for Oslo? What's it like there now?"}],
-    extra_body=agent_ref,
-)
-
-while True:
-    calls = [item for item in response.output if item.type == "function_call"]
-    if not calls:
-        break  # no pending tool calls → response holds the final text
-
-    tool_outputs = []
-    for call in calls:
-        args   = json.loads(call.arguments)
-        result = get_weather(**args)               # ← run YOUR function
-        print(f"[tool] {call.name}({args}) -> {result}")
-        tool_outputs.append({
-            "type": "function_call_output",
-            "call_id": call.call_id,
-            "output": result,
-        })
-
-    # Feed results back; previous_response_id continues the same exchange.
-    response = openai_client.responses.create(
-        input=tool_outputs,
-        previous_response_id=response.id,
-        extra_body=agent_ref,
-    )
-
-print()
-print(response.output_text)"""),
+System.out.println("PersistentAgent created: " + weatherAgent.getName());
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -285,10 +220,18 @@ print(response.output_text)"""),
 *your* knowledge so its answers are backed by real sources.
 """ + next_link("04-grounding-rag-foundry-iq", "M4 · Grounding / RAG (Foundry IQ)")),
 ]
+    # Extra Java cells
+    code("""\
+// ── Run the function-calling loop ──────────────────────────────────────
+System.out.println("=== Function-calling loop ===");
+String userQuestion = "Should I pack a coat for Oslo? What's it like there now?";
+String reply = runWithTools(projectClient, weatherAgent, userQuestion);
+System.out.println(reply);
+
+projectClient.getPersistentAgentsAdministrationClient().deleteAgent(weatherAgent.getId());"""),
+
 
 write_notebook(
     "docs/modules/03-tools-and-function-calling.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )

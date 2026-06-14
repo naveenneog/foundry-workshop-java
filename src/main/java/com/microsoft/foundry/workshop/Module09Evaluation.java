@@ -193,7 +193,7 @@ public class Module09Evaluation {
         private final double threshold;
 
         public KeyTermCoverageEvaluator() {
-            this(4, 0.5);
+            this(4, 0.8);
         }
 
         public KeyTermCoverageEvaluator(int minLen, double threshold) {

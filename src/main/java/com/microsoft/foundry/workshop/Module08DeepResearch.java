@@ -1,16 +1,19 @@
 package com.microsoft.foundry.workshop;
 
-import com.azure.ai.projects.AIProjectClient;
-import com.azure.ai.projects.AIProjectClientBuilder;
-import com.azure.ai.projects.models.Agent;
-import com.azure.ai.projects.models.AgentThread;
-import com.azure.ai.projects.models.BingGroundingToolDefinition;
-import com.azure.ai.projects.models.CreateAgentOptions;
-import com.azure.ai.projects.models.CreateRunOptions;
-import com.azure.ai.projects.models.MessageRole;
-import com.azure.ai.projects.models.RunStatus;
-import com.azure.ai.projects.models.ThreadMessage;
-import com.azure.ai.projects.models.ThreadRun;
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.BingGroundingSearchConfiguration;
+import com.azure.ai.agents.persistent.models.BingGroundingSearchToolParameters;
+import com.azure.ai.agents.persistent.models.BingGroundingToolDefinition;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
 import com.azure.core.credential.TokenCredential;
 import com.azure.identity.DefaultAzureCredentialBuilder;
 
@@ -46,16 +49,19 @@ public class Module08DeepResearch {
         System.out.println();
 
         TokenCredential credential = new DefaultAzureCredentialBuilder().build();
-        AIProjectClient projectClient = new AIProjectClientBuilder()
+        PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
             .endpoint(config.projectEndpoint)
             .credential(credential)
             .buildClient();
 
         // ── 1. Create the research agent with Bing grounding ──────────────────
-        BingGroundingToolDefinition bingTool = new BingGroundingToolDefinition()
-            .setConnectionId(BING_CONNECTION);
+        BingGroundingToolDefinition bingTool = new BingGroundingToolDefinition(
+            new BingGroundingSearchToolParameters(
+                List.of(new BingGroundingSearchConfiguration(BING_CONNECTION))
+            )
+        );
 
-        Agent researchAgent = projectClient.getAgentsClient().createAgent(
+        PersistentAgent researchAgent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
             new CreateAgentOptions(config.researchModel)
                 .setName("deep-research-agent")
                 .setInstructions(
@@ -85,7 +91,7 @@ public class Module08DeepResearch {
         String report = runResearch(projectClient, researchAgent, researchQuestion);
         System.out.println(report);
 
-        projectClient.getAgentsClient().deleteAgent(researchAgent.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(researchAgent.getId());
     }
 
     /**
@@ -93,15 +99,14 @@ public class Module08DeepResearch {
      * web searches and synthesis.
      */
     public static String runResearch(
-            AIProjectClient client, Agent agent, String question)
+            PersistentAgentsClient client, PersistentAgent agent, String question)
             throws InterruptedException {
 
-        AgentThread thread = client.getAgentsClient().createThread();
-        client.getAgentsClient().createMessage(thread.getId(), MessageRole.USER, question);
+        PersistentAgentThread thread = client.getThreadsClient().createThread();
+        client.getMessagesClient().createMessage(thread.getId(), MessageRole.USER, question);
 
-        ThreadRun run = client.getAgentsClient().createRun(
-            thread.getId(), new CreateRunOptions(agent.getId())
-        );
+        ThreadRun run = client.getRunsClient().createRun(
+                new CreateRunOptions(thread.getId(), agent.getId()));
 
         int elapsed = 0;
         while (run.getStatus() == RunStatus.IN_PROGRESS
@@ -111,20 +116,19 @@ public class Module08DeepResearch {
             if (elapsed % 10 == 0) {
                 System.out.println("  Still researching... (" + elapsed + "s)");
             }
-            run = client.getAgentsClient().getRun(thread.getId(), run.getId());
+            run = client.getRunsClient().getRun(thread.getId(), run.getId());
         }
 
         if (run.getStatus() != RunStatus.COMPLETED) {
             throw new RuntimeException("Research run did not complete: " + run.getStatus());
         }
 
-        List<ThreadMessage> messages = client.getAgentsClient()
-            .listMessages(thread.getId()).stream().toList();
+        List<ThreadMessage> messages = client.getMessagesClient().listMessages(thread.getId()).stream().toList();
         for (ThreadMessage msg : messages) {
-            if (msg.getRole() == MessageRole.ASSISTANT) {
+            if (msg.getRole() == MessageRole.AGENT) {
                 return msg.getContent().stream()
                     .filter(c -> "text".equals(c.getType()))
-                    .map(c -> c.asText().getText().getValue())
+                    .map(c -> { MessageTextContent tc = (MessageTextContent) c; return tc.getText().getValue(); })
                     .findFirst().orElse("");
             }
         }

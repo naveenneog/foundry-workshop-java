@@ -18,9 +18,6 @@ RESEARCH_MODEL is read from .env (default `o3-deep-research`).
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M8 · Deep Research
@@ -60,19 +57,10 @@ question → o3-deep-research ──▶ search(query)   ┐
 Two model deployments: the **research** model that does the planning/tool-calling, and the
 **synthesis** model that writes the report. `RESEARCH_MODEL` defaults to `o3-deep-research`."""),
     code("""\
-import os, json, time
-from dotenv import load_dotenv
-
-load_dotenv()  # reads .env from the repo root
-
-PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-RESEARCH_MODEL   = os.environ.get("RESEARCH_MODEL", "o3-deep-research")
-SYNTHESIS_MODEL  = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-MAX_ITERATIONS   = 6   # safety cap on the research loop
-
-print("Project   :", PROJECT_ENDPOINT)
-print("Research  :", RESEARCH_MODEL)
-print("Synthesis :", SYNTHESIS_MODEL)"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module08DeepResearch
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module08DeepResearch.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -90,17 +78,23 @@ The familiar bootstrap. Because a deep-research call can run for **minutes**, we
 long-timeout view of the client with `.with_options(...)` for the research loop, and use the
 default client for fast synthesis."""),
     code("""\
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-
-credential     = DefaultAzureCredential()
-project_client = AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-openai_client  = project_client.get_openai_client()
-
-research_client = openai_client.with_options(timeout=600.0)  # o3 can run several minutes
-
-print("openai_client   : ready")
-print("research_client : ready (timeout=600s)")"""),
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.BingGroundingSearchConfiguration;
+import com.azure.ai.agents.persistent.models.BingGroundingSearchToolParameters;
+import com.azure.ai.agents.persistent.models.BingGroundingToolDefinition;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.core.credential.TokenCredential;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import java.util.List;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -118,50 +112,9 @@ We use a tiny in-notebook corpus of paper abstracts so the lab is self-contained
 it through two function tools the model will call: **`search`** (find relevant docs) and
 **`fetch`** (read one in full)."""),
     code("""\
-# A miniature corpus — in production this is a Foundry IQ knowledge base (see note).
-CORPUS = {
-    "doc-001": {"title": "Prototypical Networks for Few-Shot Learning",
-                "text": "Prototypical networks learn a metric space where classification is "
-                        "performed by computing distances to per-class prototypes. Strong on "
-                        "miniImageNet 5-way 5-shot; simpler than matching networks."},
-    "doc-002": {"title": "Model-Agnostic Meta-Learning (MAML)",
-                "text": "MAML learns an initialization that adapts to a new task in a few "
-                        "gradient steps. Model-agnostic; competitive few-shot accuracy but "
-                        "costly second-order gradients."},
-    "doc-003": {"title": "Matching Networks for One Shot Learning",
-                "text": "Matching networks use attention over a labelled support set to "
-                        "classify with one example per class; introduced episodic training."},
-    "doc-004": {"title": "Linformer: Self-Attention with Linear Complexity",
-                "text": "Linformer projects keys and values to a low-rank form, reducing "
-                        "self-attention from O(n^2) to O(n) in sequence length."},
-}
-
-def tool_search(query: str) -> dict:
-    \"\"\"Return doc summaries whose title/text match any query keyword.\"\"\"
-    terms = {w.lower().strip('.,?') for w in query.split() if len(w) > 3}
-    hits = [{"id": i, "title": d["title"], "summary": d["text"][:120] + "..."}
-            for i, d in CORPUS.items()
-            if terms & set((d["title"] + " " + d["text"]).lower().split())]
-    print(f"   search({query[:48]!r}) -> {len(hits)} hit(s)")
-    return {"results": hits}
-
-def tool_fetch(document_id: str) -> dict:
-    \"\"\"Return the full document by id.\"\"\"
-    print(f"   fetch({document_id!r})")
-    doc = CORPUS.get(document_id)
-    return doc | {"id": document_id} if doc else {"error": "not found"}
-
-TOOLS = [
-    {"type": "function", "function": {
-        "name": "search", "description": "Search the research corpus; returns doc ids + summaries.",
-        "parameters": {"type": "object",
-                       "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
-    {"type": "function", "function": {
-        "name": "fetch", "description": "Fetch the full text of one document by its id.",
-        "parameters": {"type": "object",
-                       "properties": {"document_id": {"type": "string"}}, "required": ["document_id"]}}},
-]
-print(f"Corpus: {len(CORPUS)} docs | tools: search, fetch")"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -183,40 +136,19 @@ then loop: each turn the model either **calls tools** (we execute them and feed 
 or **stops** — signalling it has enough to conclude. We track iterations and tool calls so
 the process is observable, and cap the loop for safety."""),
     code("""\
-def run_deep_research(question: str) -> dict:
-    \"\"\"Agentic loop: o3-deep-research plans + calls tools until it's ready to conclude.\"\"\"
-    messages = [
-        {"role": "system", "content":
-            "You are a deep-research assistant. Investigate the user's question using the "
-            "search and fetch tools: search broadly, fetch the most relevant documents, and "
-            "search again to fill gaps. Cite document ids like [doc-001]. If the corpus does "
-            "not cover the question, say so explicitly rather than guessing."},
-        {"role": "user", "content": question},
-    ]
-    tool_calls_made, iterations = [], 0
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-    for iterations in range(1, MAX_ITERATIONS + 1):
-        print(f"Iteration {iterations}")
-        msg = research_client.chat.completions.create(
-            model=RESEARCH_MODEL, messages=messages, tools=TOOLS,
-        ).choices[0].message
-        messages.append(msg)
+System.out.println("Project        : " + config.projectEndpoint);
+System.out.println("Research model : " + config.researchModel);
+System.out.println("Bing connection: " + BING_CONNECTION);
+System.out.println();
 
-        if not msg.tool_calls:
-            break  # model is done researching
-
-        for call in msg.tool_calls:
-            args = json.loads(call.function.arguments)
-            result = tool_search(**args) if call.function.name == "search" else tool_fetch(**args)
-            tool_calls_made.append(call.function.name)
-            messages.append({"role": "tool", "tool_call_id": call.id,
-                             "content": json.dumps(result)})
-
-    findings = msg.content or "(model concluded without a summary message)"
-    return {"findings": findings, "iterations": iterations,
-            "tool_calls": tool_calls_made, "messages": messages}
-
-print("run_deep_research() ready")"""),
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
+PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -233,23 +165,28 @@ Pose a real question, run the loop, then hand the model's findings to the **synt
 to format a clean report. Splitting *research* from *writing* keeps the expensive reasoning
 focused and lets a fast model do the prose."""),
     code("""\
-question = ("What are the main approaches to few-shot learning in the corpus, "
-            "and how do they differ? Cite the documents.")
+// ── 1. Create the research agent with Bing grounding ──────────────────
+BingGroundingToolDefinition bingTool = new BingGroundingToolDefinition(
+    new BingGroundingSearchToolParameters(
+        List.of(new BingGroundingSearchConfiguration(BING_CONNECTION))
+    )
+);
 
-research = run_deep_research(question)
+PersistentAgent researchAgent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
+    new CreateAgentOptions(config.researchModel)
+        .setName("deep-research-agent")
+        .setInstructions(
+            "You are a thorough research assistant. When asked a question:\n" +
+            "1. Search the web for relevant, up-to-date information.\n" +
+            "2. Synthesise findings across multiple sources.\n" +
+            "3. Cite every factual claim with its source URL.\n" +
+            "4. Summarise key findings in a structured format."
+        )
+        .setTools(List.of(bingTool))
+);
 
-report = openai_client.chat.completions.create(
-    model=SYNTHESIS_MODEL,
-    messages=[
-        {"role": "system", "content": "You are a research report writer. Turn the findings "
-         "into a concise, well-structured report. Preserve every [doc-id] citation."},
-        {"role": "user", "content": f"Question:\\n{question}\\n\\nFindings:\\n{research['findings']}"},
-    ],
-).choices[0].message.content
-
-print(f"\\nIterations : {research['iterations']}")
-print(f"Tool calls : {research['tool_calls']}\\n")
-print(report)"""),
+System.out.println("Research agent created: " + researchAgent.getName());
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -286,11 +223,21 @@ A trustworthy researcher admits what it *doesn't* know. Ask something the corpus
 cover and watch the model **decline** rather than hallucinate — the system prompt told it to
 say so explicitly when the corpus falls short."""),
     code("""\
-oos = run_deep_research("What are the latest breakthroughs in nuclear fusion energy?")
+// ── 2. Run a deep research query ──────────────────────────────────────
+String researchQuestion =
+    "What are the latest developments in AI agent frameworks in 2024–2025? " +
+    "Focus on Microsoft's approach vs. other major players. " +
+    "Provide a structured summary with citations.";
 
-print(f"\\nIterations : {oos['iterations']}")
-print(f"Tool calls : {oos['tool_calls']}\\n")
-print(oos["findings"])"""),
+System.out.println("Research question: " + researchQuestion);
+System.out.println();
+System.out.println("Running deep research (this may take 30–120 seconds)...");
+System.out.println();
+
+String report = runResearch(projectClient, researchAgent, researchQuestion);
+System.out.println(report);
+
+projectClient.getPersistentAgentsAdministrationClient().deleteAgent(researchAgent.getId());"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -333,6 +280,4 @@ answer quality, groundedness, and safety systematically.
 write_notebook(
     "docs/modules/08-deep-research.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )

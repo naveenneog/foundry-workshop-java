@@ -1,20 +1,22 @@
 package com.microsoft.foundry.workshop;
 
-import com.azure.ai.projects.AIProjectClient;
-import com.azure.ai.projects.AIProjectClientBuilder;
-import com.azure.ai.projects.models.Agent;
-import com.azure.ai.projects.models.AgentThread;
-import com.azure.ai.projects.models.CreateAgentOptions;
-import com.azure.ai.projects.models.CreateRunOptions;
-import com.azure.ai.projects.models.FunctionDefinition;
-import com.azure.ai.projects.models.FunctionToolDefinition;
-import com.azure.ai.projects.models.MessageRole;
-import com.azure.ai.projects.models.RequiredFunctionToolCall;
-import com.azure.ai.projects.models.RunStatus;
-import com.azure.ai.projects.models.SubmitToolOutputsAction;
-import com.azure.ai.projects.models.ThreadMessage;
-import com.azure.ai.projects.models.ThreadRun;
-import com.azure.ai.projects.models.ToolOutput;
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.FunctionDefinition;
+import com.azure.ai.agents.persistent.models.FunctionToolDefinition;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RequiredFunctionToolCall;
+import com.azure.ai.agents.persistent.models.RequiredToolCall;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.SubmitToolOutputsAction;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.ToolOutput;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
 import com.azure.core.credential.TokenCredential;
 import com.azure.core.util.BinaryData;
 import com.azure.identity.DefaultAzureCredentialBuilder;
@@ -58,7 +60,7 @@ public class Module13HumanInTheLoopAndRest {
         System.out.println();
 
         TokenCredential credential = new DefaultAzureCredentialBuilder().build();
-        AIProjectClient projectClient = new AIProjectClientBuilder()
+        PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
             .endpoint(config.projectEndpoint)
             .credential(credential)
             .buildClient();
@@ -93,7 +95,7 @@ public class Module13HumanInTheLoopAndRest {
         );
 
         // ── 2. Create the agent ───────────────────────────────────────────────
-        Agent agent = projectClient.getAgentsClient().createAgent(
+        PersistentAgent agent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
             new CreateAgentOptions(config.chatModel)
                 .setName("hitl-agent")
                 .setInstructions("You are a helpful assistant. Use tools when appropriate. " +
@@ -101,7 +103,7 @@ public class Module13HumanInTheLoopAndRest {
                 .setTools(List.of(sendEmailTool, getInfoTool))
         );
 
-        System.out.println("Agent created: " + agent.getName());
+        System.out.println("PersistentAgent created: " + agent.getName());
         System.out.println();
 
         // ── 3. Run with human-in-the-loop approval ────────────────────────────
@@ -112,7 +114,7 @@ public class Module13HumanInTheLoopAndRest {
         String reply = runWithApproval(projectClient, agent, userRequest);
         System.out.println("Final response: " + reply);
 
-        projectClient.getAgentsClient().deleteAgent(agent.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agent.getId());
     }
 
     /**
@@ -122,25 +124,25 @@ public class Module13HumanInTheLoopAndRest {
      * the operator to approve or reject it before continuing.
      */
     public static String runWithApproval(
-            AIProjectClient client, Agent agent, String userMessage)
+            PersistentAgentsClient client, PersistentAgent agent, String userMessage)
             throws Exception {
 
-        AgentThread thread = client.getAgentsClient().createThread();
-        client.getAgentsClient().createMessage(thread.getId(), MessageRole.USER, userMessage);
+        PersistentAgentThread thread = client.getThreadsClient().createThread();
+        client.getMessagesClient().createMessage(thread.getId(), MessageRole.USER, userMessage);
 
-        ThreadRun run = client.getAgentsClient().createRun(
-            thread.getId(), new CreateRunOptions(agent.getId())
-        );
+        ThreadRun run = client.getRunsClient().createRun(
+                new CreateRunOptions(thread.getId(), agent.getId()));
 
         while (true) {
             Thread.sleep(1_000);
-            run = client.getAgentsClient().getRun(thread.getId(), run.getId());
+            run = client.getRunsClient().getRun(thread.getId(), run.getId());
 
             if (run.getStatus() == RunStatus.REQUIRES_ACTION) {
                 SubmitToolOutputsAction action = (SubmitToolOutputsAction) run.getRequiredAction();
                 List<ToolOutput> toolOutputs = new ArrayList<>();
 
-                for (RequiredFunctionToolCall call : action.getSubmitToolOutputs().getToolCalls()) {
+                for (RequiredToolCall _toolCall : action.getSubmitToolOutputs().getToolCalls()) {
+                    RequiredFunctionToolCall call = (RequiredFunctionToolCall) _toolCall;
                     String toolName = call.getFunction().getName();
                     String argsJson = call.getFunction().getArguments();
                     String output;
@@ -150,10 +152,10 @@ public class Module13HumanInTheLoopAndRest {
                     } else {
                         output = dispatchTool(toolName, argsJson);
                     }
-                    toolOutputs.add(new ToolOutput(call.getId(), output));
+                    toolOutputs.add(new ToolOutput().setToolCallId(call.getId()).setOutput(output));
                 }
 
-                run = client.getAgentsClient().submitToolOutputsToRun(
+                run = client.getRunsClient().submitToolOutputsToRun(
                     thread.getId(), run.getId(), toolOutputs
                 );
 
@@ -165,13 +167,12 @@ public class Module13HumanInTheLoopAndRest {
             }
         }
 
-        List<ThreadMessage> messages = client.getAgentsClient()
-            .listMessages(thread.getId()).stream().toList();
+        List<ThreadMessage> messages = client.getMessagesClient().listMessages(thread.getId()).stream().toList();
         for (ThreadMessage msg : messages) {
-            if (msg.getRole() == MessageRole.ASSISTANT) {
+            if (msg.getRole() == MessageRole.AGENT) {
                 return msg.getContent().stream()
                     .filter(c -> "text".equals(c.getType()))
-                    .map(c -> c.asText().getText().getValue())
+                    .map(c -> { MessageTextContent tc = (MessageTextContent) c; return tc.getText().getValue(); })
                     .findFirst().orElse("");
             }
         }

@@ -4,22 +4,22 @@ import com.azure.ai.openai.OpenAIClient;
 import com.azure.ai.openai.OpenAIClientBuilder;
 import com.azure.ai.openai.models.Embeddings;
 import com.azure.ai.openai.models.EmbeddingsOptions;
-import com.azure.ai.projects.AIProjectClient;
-import com.azure.ai.projects.AIProjectClientBuilder;
-import com.azure.ai.projects.models.Agent;
-import com.azure.ai.projects.models.AgentThread;
-import com.azure.ai.projects.models.AzureAISearchQueryType;
-import com.azure.ai.projects.models.AzureAISearchToolDefinition;
-import com.azure.ai.projects.models.AzureAISearchToolResource;
-import com.azure.ai.projects.models.ConnectionType;
-import com.azure.ai.projects.models.CreateAgentOptions;
-import com.azure.ai.projects.models.CreateRunOptions;
-import com.azure.ai.projects.models.GetConnectionOptions;
-import com.azure.ai.projects.models.MessageRole;
-import com.azure.ai.projects.models.RunStatus;
-import com.azure.ai.projects.models.ThreadMessage;
-import com.azure.ai.projects.models.ThreadRun;
-import com.azure.ai.projects.models.ToolResources;
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.AISearchIndexResource;
+import com.azure.ai.agents.persistent.models.AzureAISearchQueryType;
+import com.azure.ai.agents.persistent.models.AzureAISearchToolDefinition;
+import com.azure.ai.agents.persistent.models.AzureAISearchToolResource;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.ToolResources;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
 import com.azure.core.credential.TokenCredential;
 import com.azure.identity.DefaultAzureCredentialBuilder;
 import com.azure.search.documents.SearchClient;
@@ -63,7 +63,7 @@ public class Module04GroundingRagFoundryIq {
                 "(environment, managed identity, az login) and uses the first that works. " +
                 "No secrets in code.",
             "category", "security"),
-        Map.of("id", "2", "title", "Agent versioning",
+        Map.of("id", "2", "title", "PersistentAgent versioning",
             "content", "An agent is stored under a stable name. create_version (Python) / " +
                 "createAgent (Java) stores a new definition; callers reference the agent by name.",
             "category", "agents"),
@@ -98,7 +98,7 @@ public class Module04GroundingRagFoundryIq {
             .credential(credential)
             .buildClient();
 
-        AIProjectClient projectClient = new AIProjectClientBuilder()
+        PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
             .endpoint(config.projectEndpoint)
             .credential(credential)
             .buildClient();
@@ -161,7 +161,7 @@ public class Module04GroundingRagFoundryIq {
 
         for (int i = 0; i < CORPUS.size(); i++) {
             Map<String, Object> doc = CORPUS.get(i);
-            List<Double> vector = embeddings.getData().get(i).getEmbedding();
+            List<Float> vector = embeddings.getData().get(i).getEmbedding();
             // Add embedding to document
             Map<String, Object> indexDoc = new java.util.HashMap<>(doc);
             indexDoc.put("embedding", vector);
@@ -172,13 +172,13 @@ public class Module04GroundingRagFoundryIq {
     }
 
     private static void runGroundedAgent(
-            AIProjectClient projectClient, String chatModel, String searchEndpoint)
+            PersistentAgentsClient projectClient, String chatModel, String searchEndpoint)
             throws InterruptedException {
 
         // Create an agent with Azure AI Search as a grounding tool
         AzureAISearchToolDefinition searchTool = new AzureAISearchToolDefinition();
 
-        Agent agent = projectClient.getAgentsClient().createAgent(
+        PersistentAgent agent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
             new CreateAgentOptions(chatModel)
                 .setName("grounded-rag-agent")
                 .setInstructions("You are a helpful assistant. Use the knowledge base " +
@@ -186,8 +186,8 @@ public class Module04GroundingRagFoundryIq {
                 .setTools(List.of(searchTool))
                 .setToolResources(new ToolResources()
                     .setAzureAISearch(new AzureAISearchToolResource()
-                        .setIndexes(List.of(
-                            new com.azure.ai.projects.models.AzureAISearchIndexResource()
+                        .setIndexList(List.of(
+                            new AISearchIndexResource()
                                 .setIndexConnectionId(INDEX_NAME)
                                 .setIndexName(INDEX_NAME)
                                 .setQueryType(AzureAISearchQueryType.VECTOR_SEMANTIC_HYBRID)
@@ -197,32 +197,30 @@ public class Module04GroundingRagFoundryIq {
                 )
         );
 
-        AgentThread thread = projectClient.getAgentsClient().createThread();
-        projectClient.getAgentsClient().createMessage(thread.getId(), MessageRole.USER,
+        PersistentAgentThread thread = projectClient.getThreadsClient().createThread();
+        projectClient.getMessagesClient().createMessage(thread.getId(), MessageRole.USER,
             "What embedding size does text-embedding-3-large return?");
 
-        ThreadRun run = projectClient.getAgentsClient().createRun(
-            thread.getId(), new CreateRunOptions(agent.getId())
-        );
+        ThreadRun run = projectClient.getRunsClient().createRun(
+                new CreateRunOptions(thread.getId(), agent.getId()));
 
         while (run.getStatus() == RunStatus.IN_PROGRESS
             || run.getStatus() == RunStatus.QUEUED) {
             Thread.sleep(1_000);
-            run = projectClient.getAgentsClient().getRun(thread.getId(), run.getId());
+            run = projectClient.getRunsClient().getRun(thread.getId(), run.getId());
         }
 
-        List<ThreadMessage> messages = projectClient.getAgentsClient()
-            .listMessages(thread.getId()).stream().toList();
+        List<ThreadMessage> messages = projectClient.getMessagesClient().listMessages(thread.getId()).stream().toList();
         for (ThreadMessage msg : messages) {
-            if (msg.getRole() == MessageRole.ASSISTANT) {
+            if (msg.getRole() == MessageRole.AGENT) {
                 System.out.println(msg.getContent().stream()
                     .filter(c -> "text".equals(c.getType()))
-                    .map(c -> c.asText().getText().getValue())
+                    .map(c -> { MessageTextContent tc = (MessageTextContent) c; return tc.getText().getValue(); })
                     .findFirst().orElse(""));
                 break;
             }
         }
 
-        projectClient.getAgentsClient().deleteAgent(agent.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agent.getId());
     }
 }

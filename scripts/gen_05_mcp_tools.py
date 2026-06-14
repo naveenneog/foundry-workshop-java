@@ -11,9 +11,6 @@ calls it.
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M5 · MCP Tools
@@ -46,23 +43,10 @@ Beyond the usual project variables, we read the **MCP server endpoint** and a sh
 **server label**. The label namespaces the server's tools inside the agent, so multiple
 MCP servers can coexist without collisions."""),
     code("""\
-import os
-from dotenv import load_dotenv
-
-load_dotenv()  # reads .env from the repo root
-
-PROJECT_ENDPOINT = os.environ["PROJECT_ENDPOINT"]
-CHAT_MODEL       = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-
-# A remote MCP server, already deployed (see Platform docs). The URL typically ends in
-# an SSE endpoint, e.g. https://<host>/runtime/webhooks/mcp/sse?code=<key>
-MCP_SERVER_URL   = os.environ["MCP_SERVER_URL"]
-MCP_SERVER_LABEL = os.environ.get("MCP_SERVER_LABEL", "project_tracker")
-
-print("Project :", PROJECT_ENDPOINT)
-print("Model   :", CHAT_MODEL)
-print("MCP url :", MCP_SERVER_URL.split("?")[0], "(+ key)")
-print("Label   :", MCP_SERVER_LABEL)"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module05McpTools
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module05McpTools.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -81,15 +65,24 @@ The same bootstrap as every lab: one credential, one project client, one
 OpenAI-compatible client. The Responses API on `openai_client` is how we'll invoke the
 agent once its MCP tool is attached."""),
     code("""\
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-
-credential     = DefaultAzureCredential()
-project_client = AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-openai_client  = project_client.get_openai_client()
-
-print("project_client :", "ready")
-print("openai_client  :", "ready")"""),
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
+import com.azure.ai.agents.persistent.models.OpenApiAnonymousAuthDetails;
+import com.azure.ai.agents.persistent.models.OpenApiFunctionDefinition;
+import com.azure.ai.agents.persistent.models.OpenApiToolDefinition;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.core.credential.TokenCredential;
+import com.azure.core.util.BinaryData;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import java.util.List;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -105,29 +98,9 @@ You give an agent an MCP server by adding **one tool definition** to its
 `server_label`, and the `server_url`. Setting `require_approval="never"` lets the agent
 call tools without pausing for a human OK — fine for trusted, read-mostly servers."""),
     code("""\
-from azure.ai.projects.models import PromptAgentDefinition
-
-instructions = (
-    "You are a project-management assistant. Use the project_tracker MCP tools to "
-    "read live project data — never guess IDs, owners, or dates. If the tools return "
-    "nothing relevant, say so plainly rather than inventing an answer."
-)
-
-agent = project_client.agents.create_version(
-    agent_name="pm-assistant",
-    definition=PromptAgentDefinition(
-        model=CHAT_MODEL,
-        instructions=instructions,
-        tools=[{
-            "type": "mcp",
-            "server_label": MCP_SERVER_LABEL,
-            "server_url": MCP_SERVER_URL,
-            "require_approval": "never",
-        }],
-    ),
-    description="PM assistant backed by a remote MCP server.",
-)
-print(f"Agent '{agent.name}' ready (version {agent.version}).")"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -145,22 +118,19 @@ the model reads the available tools, decides which to call, sends the call to th
 server, and folds the result into its answer. The tools it invoked show up as **`mcp_call`
 items** in `response.output`."""),
     code("""\
-def ask(question: str) -> tuple[str, list[str]]:
-    \"\"\"Send a question to the agent; return (answer_text, mcp_tools_called).\"\"\"
-    response = openai_client.responses.create(
-        input=[{"role": "user", "content": question}],
-        extra_body={"agent_reference": {"name": agent.name, "version": agent.version,
-                                        "type": "agent_reference"}},
-    )
-    if response.status != "completed" or response.error:
-        raise RuntimeError(f"Run did not complete: {response.status} {response.error}")
-    tools_called = [getattr(i, "name", i.server_label) for i in response.output
-                    if getattr(i, "type", None) == "mcp_call"]
-    return response.output_text, tools_called
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-answer, tools = ask("Which tasks are overdue, and who owns each one?")
-print("Tools called:", tools)
-print(answer)"""),
+System.out.println("Project    : " + config.projectEndpoint);
+System.out.println("Chat       : " + config.chatModel);
+System.out.println("MCP server : " + MCP_SERVER_URL);
+System.out.println();
+
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
+PersistentAgentsClient client = new PersistentAgentsClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -181,18 +151,18 @@ items in the response output the first time the agent connects. Printing them sh
 exact catalog the model chose from — useful when an agent *isn't* calling the tool you
 expected."""),
     code("""\
-response = openai_client.responses.create(
-    input="What can you help me with?",
-    extra_body={"agent_reference": {"name": agent.name, "version": agent.version,
-                                    "type": "agent_reference"}},
-)
+// ── 1. Build an OpenAPI tool backed by the MCP server spec ────────────
+String spec = String.format(MCP_OPENAPI_SPEC, MCP_SERVER_URL);
+OpenApiToolDefinition mcpTool = new OpenApiToolDefinition(
+    new OpenApiFunctionDefinition(
+        "workshop-mcp",
+        BinaryData.fromString(spec),
+        new OpenApiAnonymousAuthDetails()
+    ).setDescription("Tools exposed by the workshop MCP server.")
+);
 
-for item in response.output:
-    if getattr(item, "type", None) == "mcp_list_tools":
-        print(f"Server '{item.server_label}' exposes {len(item.tools)} tools:")
-        for tool in item.tools[:5]:
-            print(f"  - {tool['name']}")
-        break"""),
+System.out.println("OpenAPI/MCP tool declared: " + mcpTool.getOpenapi().getName());
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -217,27 +187,17 @@ you must edit each agent. The **Foundry tool catalog** fixes this: register the 
 server **once** as a project connection, then agents reference it by **connection id**.
 The credential lives in the connection, not the agent definition."""),
     code("""\
-# A connection named e.g. 'project-tracker-mcp' was registered once (see Platform docs).
-MCP_CONNECTION = os.environ.get("MCP_CONNECTION", "project-tracker-mcp")
-catalog_tool   = project_client.connections.get(MCP_CONNECTION)
+// ── 2. Create an agent with the MCP/OpenAPI tool ───────────────────────
+PersistentAgent agent = client.getPersistentAgentsAdministrationClient().createAgent(
+    new CreateAgentOptions(config.chatModel)
+        .setName("mcp-demo-agent")
+        .setInstructions("You are a helpful assistant. Use the tools available " +
+            "to you to answer questions. When a tool is relevant, call it.")
+        .setTools(List.of(mcpTool))
+);
 
-agent_v2 = project_client.agents.create_version(
-    agent_name="pm-assistant",
-    definition=PromptAgentDefinition(
-        model=CHAT_MODEL,
-        instructions=instructions,
-        tools=[{
-            "type": "mcp",
-            "server_label": MCP_SERVER_LABEL,
-            "server_url": catalog_tool.target,          # endpoint from the catalog
-            "project_connection_id": catalog_tool.id,   # reference, not a baked-in key
-            "require_approval": "never",
-        }],
-    ),
-    description="PM assistant — MCP server referenced via the tool catalog.",
-)
-print(f"Agent '{agent_v2.name}' now at version {agent_v2.version}.")
-print(f"Tool source: catalog connection '{MCP_CONNECTION}' (no key in the definition).")"""),
+System.out.println("Agent created: " + agent.getName());
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -272,10 +232,18 @@ and moved the credential into the tool catalog.** Next: give your agent **memory
 remembers across turns.
 """ + next_link("06-agent-memory", "M6 · Agent Memory")),
 ]
+    # Extra Java cells
+    code("""\
+// ── 3. Invoke via standard thread / run lifecycle ──────────────────────
+System.out.println("=== MCP agent query ===");
+String reply = invokeAgent(client, agent,
+    "What is the current time in UTC? Use any available tool to find out.");
+System.out.println(reply);
+
+client.getPersistentAgentsAdministrationClient().deleteAgent(agent.getId());"""),
+
 
 write_notebook(
     "docs/modules/05-mcp-tools.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )

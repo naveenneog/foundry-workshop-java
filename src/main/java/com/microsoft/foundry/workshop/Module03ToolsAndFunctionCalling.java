@@ -1,22 +1,24 @@
 package com.microsoft.foundry.workshop;
 
-import com.azure.ai.projects.AIProjectClient;
-import com.azure.ai.projects.AIProjectClientBuilder;
-import com.azure.ai.projects.models.Agent;
-import com.azure.ai.projects.models.AgentThread;
-import com.azure.ai.projects.models.CreateAgentOptions;
-import com.azure.ai.projects.models.CreateRunOptions;
-import com.azure.ai.projects.models.FunctionToolDefinition;
-import com.azure.ai.projects.models.FunctionDefinition;
-import com.azure.ai.projects.models.MessageRole;
-import com.azure.ai.projects.models.RequiredAction;
-import com.azure.ai.projects.models.RequiredFunctionToolCall;
-import com.azure.ai.projects.models.RunStatus;
-import com.azure.ai.projects.models.SubmitToolOutputsAction;
-import com.azure.ai.projects.models.ThreadMessage;
-import com.azure.ai.projects.models.ThreadRun;
-import com.azure.ai.projects.models.ToolDefinition;
-import com.azure.ai.projects.models.ToolOutput;
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.FunctionToolDefinition;
+import com.azure.ai.agents.persistent.models.FunctionDefinition;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RequiredAction;
+import com.azure.ai.agents.persistent.models.RequiredFunctionToolCall;
+import com.azure.ai.agents.persistent.models.RequiredToolCall;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.SubmitToolOutputsAction;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.ToolDefinition;
+import com.azure.ai.agents.persistent.models.ToolOutput;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
 import com.azure.core.credential.TokenCredential;
 import com.azure.core.util.BinaryData;
 import com.azure.identity.DefaultAzureCredentialBuilder;
@@ -55,7 +57,7 @@ public class Module03ToolsAndFunctionCalling {
         System.out.println("Chat model : " + config.chatModel);
 
         TokenCredential credential = new DefaultAzureCredentialBuilder().build();
-        AIProjectClient projectClient = new AIProjectClientBuilder()
+        PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
             .endpoint(config.projectEndpoint)
             .credential(credential)
             .buildClient();
@@ -69,7 +71,7 @@ public class Module03ToolsAndFunctionCalling {
         System.out.println();
 
         // ── Create the weather agent ───────────────────────────────────────────
-        Agent weatherAgent = projectClient.getAgentsClient().createAgent(
+        PersistentAgent weatherAgent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
             new CreateAgentOptions(config.chatModel)
                 .setName("weather-agent")
                 .setInstructions("You are a travel assistant. Use the get_weather tool to " +
@@ -77,7 +79,7 @@ public class Module03ToolsAndFunctionCalling {
                 .setTools(List.of(getWeatherTool))
         );
 
-        System.out.println("Agent created: " + weatherAgent.getName());
+        System.out.println("PersistentAgent created: " + weatherAgent.getName());
         System.out.println();
 
         // ── Run the function-calling loop ──────────────────────────────────────
@@ -86,7 +88,7 @@ public class Module03ToolsAndFunctionCalling {
         String reply = runWithTools(projectClient, weatherAgent, userQuestion);
         System.out.println(reply);
 
-        projectClient.getAgentsClient().deleteAgent(weatherAgent.getId());
+        projectClient.getPersistentAgentsAdministrationClient().deleteAgent(weatherAgent.getId());
     }
 
     /**
@@ -127,19 +129,18 @@ public class Module03ToolsAndFunctionCalling {
      * any function calls and submitting results back to Foundry.
      */
     public static String runWithTools(
-            AIProjectClient client, Agent agent, String userMessage)
+            PersistentAgentsClient client, PersistentAgent agent, String userMessage)
             throws Exception {
 
-        AgentThread thread = client.getAgentsClient().createThread();
-        client.getAgentsClient().createMessage(thread.getId(), MessageRole.USER, userMessage);
+        PersistentAgentThread thread = client.getThreadsClient().createThread();
+        client.getMessagesClient().createMessage(thread.getId(), MessageRole.USER, userMessage);
 
-        ThreadRun run = client.getAgentsClient().createRun(
-            thread.getId(), new CreateRunOptions(agent.getId())
-        );
+        ThreadRun run = client.getRunsClient().createRun(
+                new CreateRunOptions(thread.getId(), agent.getId()));
 
         while (true) {
             Thread.sleep(1_000);
-            run = client.getAgentsClient().getRun(thread.getId(), run.getId());
+            run = client.getRunsClient().getRun(thread.getId(), run.getId());
 
             if (run.getStatus() == RunStatus.REQUIRES_ACTION) {
                 run = handleToolCalls(client, thread.getId(), run);
@@ -159,7 +160,7 @@ public class Module03ToolsAndFunctionCalling {
      * to continue the run.
      */
     private static ThreadRun handleToolCalls(
-            AIProjectClient client, String threadId, ThreadRun run)
+            PersistentAgentsClient client, String threadId, ThreadRun run)
             throws Exception {
 
         RequiredAction required = run.getRequiredAction();
@@ -168,7 +169,8 @@ public class Module03ToolsAndFunctionCalling {
         }
 
         List<ToolOutput> toolOutputs = new ArrayList<>();
-        for (RequiredFunctionToolCall call : submitAction.getSubmitToolOutputs().getToolCalls()) {
+        for (RequiredToolCall _toolCall : submitAction.getSubmitToolOutputs().getToolCalls()) {
+            RequiredFunctionToolCall call = (RequiredFunctionToolCall) _toolCall;
             String toolName = call.getFunction().getName();
             String argsJson = call.getFunction().getArguments();
 
@@ -176,10 +178,10 @@ public class Module03ToolsAndFunctionCalling {
             String result = dispatchTool(toolName, argsJson);
             System.out.println(result);
 
-            toolOutputs.add(new ToolOutput(call.getId(), result));
+            toolOutputs.add(new ToolOutput().setToolCallId(call.getId()).setOutput(result));
         }
 
-        return client.getAgentsClient().submitToolOutputsToRun(
+        return client.getRunsClient().submitToolOutputsToRun(
             threadId, run.getId(), toolOutputs
         );
     }
@@ -207,14 +209,13 @@ public class Module03ToolsAndFunctionCalling {
         return String.format("%s: %d°C, partly cloudy.", city, tempC);
     }
 
-    private static String extractLastAssistantMessage(AIProjectClient client, String threadId) {
-        List<ThreadMessage> messages = client.getAgentsClient()
-            .listMessages(threadId).stream().toList();
+    private static String extractLastAssistantMessage(PersistentAgentsClient client, String threadId) {
+        List<ThreadMessage> messages = client.getMessagesClient().listMessages(threadId).stream().toList();
         for (ThreadMessage msg : messages) {
-            if (msg.getRole() == MessageRole.ASSISTANT) {
+            if (msg.getRole() == MessageRole.AGENT) {
                 return msg.getContent().stream()
                     .filter(c -> "text".equals(c.getType()))
-                    .map(c -> c.asText().getText().getValue())
+                    .map(c -> { MessageTextContent tc = (MessageTextContent) c; return tc.getText().getValue(); })
                     .findFirst().orElse("");
             }
         }

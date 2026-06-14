@@ -13,9 +13,6 @@ agent tool.
 """
 from nbbuild import md, code, write_notebook, next_link, sibling_link, page_link
 
-KERNEL = "foundry-workshop"
-KERNEL_DISPLAY = "Microsoft Foundry: End-to-End Workshop"
-
 cells = [
     md("""\
 # M6 · Agent Memory
@@ -50,22 +47,10 @@ Alongside the usual project variables, we name a **memory store** and a **user s
 The scope is the isolation key — each user's memories live under their own scope, so one
 user never sees another's."""),
     code("""\
-import os
-from dotenv import load_dotenv
-
-load_dotenv()  # reads .env from the repo root
-
-PROJECT_ENDPOINT  = os.environ["PROJECT_ENDPOINT"]
-CHAT_MODEL        = os.environ.get("CHAT_MODEL", "gpt-4.1-mini")
-EMBEDDING_MODEL   = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
-
-MEMORY_STORE_NAME = os.environ.get("MEMORY_STORE_NAME", "dev-prefs-memory")
-USER_SCOPE        = "user_dana"   # per-user isolation key
-
-print("Project :", PROJECT_ENDPOINT)
-print("Store   :", MEMORY_STORE_NAME)
-print("Scope   :", USER_SCOPE)
-print("Models  :", CHAT_MODEL, "+", EMBEDDING_MODEL)"""),
+// To run this module from the command line:
+//   mvn exec:java -Dexec.mainClass=com.microsoft.foundry.workshop.Module06AgentMemory
+//
+// Source file: src/main/java/com/microsoft/foundry/workshop/Module06AgentMemory.java"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -83,15 +68,20 @@ print("Models  :", CHAT_MODEL, "+", EMBEDDING_MODEL)"""),
 The familiar bootstrap — one credential, the project client, and the OpenAI-compatible
 client we'll use to invoke the memory-equipped agent later."""),
     code("""\
-from azure.identity import DefaultAzureCredential
-from azure.ai.projects import AIProjectClient
-
-credential     = DefaultAzureCredential()
-project_client = AIProjectClient(endpoint=PROJECT_ENDPOINT, credential=credential)
-openai_client  = project_client.get_openai_client()
-
-print("project_client :", "ready")
-print("openai_client  :", "ready")"""),
+import com.azure.ai.agents.persistent.PersistentAgentsClient;
+import com.azure.ai.agents.persistent.PersistentAgentsClientBuilder;
+import com.azure.ai.agents.persistent.models.PersistentAgent;
+import com.azure.ai.agents.persistent.models.PersistentAgentThread;
+import com.azure.ai.agents.persistent.models.CreateAgentOptions;
+import com.azure.ai.agents.persistent.models.CreateRunOptions;
+import com.azure.ai.agents.persistent.models.MessageRole;
+import com.azure.ai.agents.persistent.models.RunStatus;
+import com.azure.ai.agents.persistent.models.ThreadMessage;
+import com.azure.ai.agents.persistent.models.ThreadRun;
+import com.azure.ai.agents.persistent.models.MessageTextContent;
+import com.azure.core.credential.TokenCredential;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import java.util.List;"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -107,60 +97,9 @@ in a small helper. Two details matter: it uses the **`https://ai.azure.com`** to
 audience (not the management plane), and write operations are **async** — you poll an
 update id until it completes."""),
     code("""\
-import time
-import requests
-
-class MemoryClient:
-    \"\"\"Minimal wrapper over the Foundry Memory REST API.\"\"\"
-    API_VERSION = "2025-11-15-preview"
-
-    def __init__(self, project_endpoint: str, credential):
-        self.base = project_endpoint.rstrip("/")
-        self._credential = credential
-
-    def _headers(self) -> dict:
-        # Memory API requires the ai.azure.com audience — distinct from management.
-        token = self._credential.get_token("https://ai.azure.com/.default").token
-        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    def _url(self, path: str) -> str:
-        return f"{self.base}/{path}?api-version={self.API_VERSION}"
-
-    def create_store(self, name, chat_model, embedding_model, description="",
-                     user_profile_details="") -> dict:
-        requests.delete(self._url(f"memory_stores/{name}"), headers=self._headers())
-        payload = {"name": name, "description": description, "definition": {
-            "kind": "default", "chat_model": chat_model,
-            "embedding_model": embedding_model,
-            "options": {"user_profile_enabled": True,
-                        "user_profile_details": user_profile_details,
-                        "chat_summary_enabled": True}}}
-        r = requests.post(self._url("memory_stores"), headers=self._headers(), json=payload)
-        return r.json() if r.status_code in (200, 201) else {"error": f"{r.status_code}: {r.text}"}
-
-    def update_memories(self, store, scope, messages, timeout=60) -> dict:
-        payload = {"scope": scope, "items": messages, "update_delay": 0}
-        r = requests.post(self._url(f"memory_stores/{store}:update_memories"),
-                          headers=self._headers(), json=payload)
-        if r.status_code not in (200, 202):
-            return {"error": f"{r.status_code}: {r.text}"}
-        update_id, start = r.json().get("update_id"), time.time()
-        while time.time() - start < timeout:            # writes are async — poll
-            s = requests.get(self._url(f"memory_stores/{store}/updates/{update_id}"),
-                             headers=self._headers())
-            if s.status_code == 200 and s.json().get("status") == "completed":
-                return s.json()
-            time.sleep(2)
-        return {"error": "timeout"}
-
-    def search_memories(self, store, scope, query, max_results=5) -> dict:
-        payload = {"scope": scope, "query": query, "max_num_results": max_results}
-        r = requests.post(self._url(f"memory_stores/{store}:search_memories"),
-                          headers=self._headers(), json=payload)
-        return r.json() if r.status_code == 200 else {"error": r.text}
-
-memory = MemoryClient(PROJECT_ENDPOINT, credential)
-print("memory client :", "ready")"""),
+// Load configuration from .env
+WorkshopConfig config = WorkshopConfig.load();
+System.out.println("Endpoint : " + config.projectEndpoint);"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -176,20 +115,18 @@ The store is the per-project container for memories. `user_profile_enabled` tell
 maintain a structured profile per scope; `chat_summary_enabled` lets it summarise
 conversations into durable facts. It uses the models you pass to do that extraction."""),
     code("""\
-result = memory.create_store(
-    name=MEMORY_STORE_NAME,
-    chat_model=CHAT_MODEL,
-    embedding_model=EMBEDDING_MODEL,
-    description="Developer preferences and working context.",
-    user_profile_details="Preferred languages, tools, OS, and answer style.",
-)
+// Setup
+WorkshopConfig config = WorkshopConfig.load();
 
-if "error" not in result:
-    print(f"Memory store '{MEMORY_STORE_NAME}' created.")
-    print(f"  chat model      : {CHAT_MODEL}")
-    print(f"  embedding model : {EMBEDDING_MODEL}")
-else:
-    print("Error:", result["error"])"""),
+System.out.println("Project : " + config.projectEndpoint);
+System.out.println("Chat    : " + config.chatModel);
+System.out.println();
+
+TokenCredential credential = new DefaultAzureCredentialBuilder().build();
+PersistentAgentsClient projectClient = new PersistentAgentsClientBuilder()
+    .endpoint(config.projectEndpoint)
+    .credential(credential)
+    .buildClient();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -207,27 +144,17 @@ Feed the store a short conversation. Its model reads the exchange and **extracts
 facts** (not the raw transcript) under the user's scope. We format messages with a tiny
 helper that matches the Memory API's `input_text` / `output_text` shape."""),
     code("""\
-def build_conversation(user_text: str, assistant_text: str) -> list:
-    return [
-        {"type": "message", "role": "user",
-         "content": [{"type": "input_text", "text": user_text}]},
-        {"type": "message", "role": "assistant",
-         "content": [{"type": "output_text", "text": assistant_text}]},
-    ]
+// ── 1. Create a stateful agent ─────────────────────────────────────────
+PersistentAgent agent = projectClient.getPersistentAgentsAdministrationClient().createAgent(
+    new CreateAgentOptions(config.chatModel)
+        .setName("memory-agent")
+        .setInstructions("You are a helpful assistant with a good memory. " +
+            "Remember what the user tells you across turns and reference " +
+            "it naturally in later replies.")
+);
 
-turn1 = build_conversation(
-    "I work mostly in Python and I like short, code-first answers. "
-    "I'm on VS Code / macOS.",
-    "Got it — Python, concise code-first answers, VS Code on macOS. I'll remember that.",
-)
-
-result = memory.update_memories(MEMORY_STORE_NAME, USER_SCOPE, turn1)
-if "error" not in result:
-    print("Memories extracted:")
-    for m in result.get("memories", []):
-        print(f"  • {m.get('content', m)}")
-else:
-    print("Error:", result["error"])"""),
+System.out.println("PersistentAgent created: " + agent.getName());
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -246,14 +173,10 @@ Querying the store by scope returns the facts most relevant to the query. This i
 exact retrieval an agent will perform under the hood — and because results are
 **scoped**, a different user's query would return their own memories, never Dana's."""),
     code("""\
-hits = memory.search_memories(
-    MEMORY_STORE_NAME, USER_SCOPE,
-    query="What are this developer's coding preferences?",
-)
-
-print("Recalled for", USER_SCOPE, ":")
-for m in hits.get("memories", []):
-    print(f"  • {m.get('content', m)}")"""),
+// ── 2. Create one thread and reuse it for all turns ────────────────────
+PersistentAgentThread thread = projectClient.getThreadsClient().createThread();
+System.out.println("Thread id: " + thread.getId());
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -276,33 +199,24 @@ scope. The agent automatically searches memory before answering **and** writes n
 memories after (`update_delay` controls the lag). Watch it carry context across two
 *separate* Responses API calls — no chat history passed between them."""),
     code("""\
-from azure.ai.projects.models import PromptAgentDefinition
+// ── 3. Multi-turn conversation on the SAME thread ──────────────────────
+System.out.println("=== Turn 1 ===");
+String r1 = sendTurn(projectClient, thread, agent,
+    "My name is Alex and I'm building an AI travel planner.");
+System.out.println(r1);
+System.out.println();
 
-agent = project_client.agents.create_version(
-    agent_name="dev-buddy",
-    definition=PromptAgentDefinition(
-        model=CHAT_MODEL,                       # deployed on this account (memory needs that)
-        instructions=("You are a developer's assistant. Always call the memory tool "
-                      "before answering, and tailor recommendations to what you recall "
-                      "about the user's languages, tools, and preferred answer style."),
-        tools=[{"type": "memory_search",
-                "memory_store_name": MEMORY_STORE_NAME,
-                "scope": USER_SCOPE,
-                "update_delay": 1}],
-    ),
-    description="Assistant with per-user memory via the memory_search tool.",
-)
-print(f"Agent 'dev-buddy' ready (version {agent.version}).\\n")
+System.out.println("=== Turn 2 ===");
+String r2 = sendTurn(projectClient, thread, agent,
+    "What's my name and what am I building?");
+System.out.println(r2);
+System.out.println();
 
-ref = {"agent_reference": {"name": agent.name, "version": agent.version,
-                           "type": "agent_reference"}}
-
-# Turn 2 — a brand-new call with NO prior messages. It recalls from the store.
-resp = openai_client.responses.create(
-    input="Recommend a way to parse JSON for me.",
-    extra_body=ref,
-)
-print(resp.output_text)"""),
+System.out.println("=== Turn 3 ===");
+String r3 = sendTurn(projectClient, thread, agent,
+    "What are three tips for building a great AI travel planner?");
+System.out.println(r3);
+System.out.println();"""),
     md("""\
 !!! note "Expected output"
     ```
@@ -337,10 +251,24 @@ print(resp.output_text)"""),
 remembers a user across turns.** Next: coordinate *several* specialised agents.
 """ + next_link("07-multi-agent-orchestration", "M7 · Multi-Agent Orchestration")),
 ]
+    # Extra Java cells
+    code("""\
+// ── 4. Show the full message history stored in the thread ──────────────
+System.out.println("=== Full thread history ===");
+List<ThreadMessage> history = projectClient.getMessagesClient().listMessages(thread.getId()).stream().toList();
+System.out.println("Total messages in thread: " + history.size());
+history.forEach(msg -> {
+    String text = msg.getContent().stream()
+        .filter(c -> "text".equals(c.getType()))
+        .map(c -> { MessageTextContent tc = (MessageTextContent) c; return tc.getText().getValue(); })
+        .findFirst().orElse("");
+    System.out.printf("[%s] %s%n", msg.getRole(), text);
+});
+
+projectClient.getPersistentAgentsAdministrationClient().deleteAgent(agent.getId());"""),
+
 
 write_notebook(
     "docs/modules/06-agent-memory.ipynb",
     cells,
-    kernel_name=KERNEL,
-    kernel_display=KERNEL_DISPLAY,
 )
